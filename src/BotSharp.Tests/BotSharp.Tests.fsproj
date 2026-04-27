@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors>FS0025</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Domain/TypesTests.fs" />
+    <Compile Include="Domain/StateMachineTests.fs" />
+    <Compile Include="Domain/ErrorsTests.fs" />
+    <Compile Include="Parsers/InputParserTests.fs" />
+    <Compile Include="Parsers/SseParserTests.fs" />
+    <Compile Include="Parsers/LlmResponseParserTests.fs" />
+    <Compile Include="Parsers/SessionParserTests.fs" />
+    <Compile Include="Parsers/ConfigParserTests.fs" />
+    <Compile Include="Parsers/ConfigLoaderTests.fs" />
+    <Compile Include="Providers/ProviderRegistryTests.fs" />
+    <Compile Include="Providers/OpenAICompatTests.fs" />
+    <Compile Include="Application/AgentLoopTests.fs" />
+    <Compile Include="Application/MemoryConsolidatorTests.fs" />
+    <Compile Include="Application/SubagentManagerTests.fs" />
+    <Compile Include="Application/SessionActorTests.fs" />
+    <Compile Include="Application/ContextBuilderTests.fs" />
+    <Compile Include="Application/AutoCompactServiceTests.fs" />
+    <Compile Include="Application/HeartbeatServiceTests.fs" />
+    <Compile Include="Channels/MarkdownParserTests.fs" />
+    <Compile Include="Channels/ApiChannelTests.fs" />
+    <Compile Include="Channels/WsChannelTests.fs" />
+    <Compile Include="Infrastructure/AsyncResultTests.fs" />
+    <Compile Include="Infrastructure/PurePropertyTests.fs" />
+    <Compile Include="Infrastructure/ToolParserTests.fs" />
+    <Compile Include="Infrastructure/ToolHintsTests.fs" />
+    <Compile Include="Infrastructure/ChannelBaseTests.fs" />
+    <Compile Include="Infrastructure/JsonTests.fs" />
+    <Compile Include="Infrastructure/GitBlameTests.fs" />
+    <Compile Include="Infrastructure/JsonlStoreTests.fs" />
+    <Compile Include="Infrastructure/DreamStoreTests.fs" />
+    <Compile Include="Infrastructure/CronStoreTests.fs" />
+    <Compile Include="Infrastructure/CronServiceTests.fs" />
+    <Compile Include="Infrastructure/CronToolTests.fs" />
+    <Compile Include="Infrastructure/DefaultSkillsTests.fs" />
+    <Compile Include="Infrastructure/SkillsLoaderTests.fs" />
+    <Compile Include="Infrastructure/ConfigWriterTests.fs" />
+    <Compile Include="Infrastructure/McpToolTests.fs" />
+    <Compile Include="Infrastructure/WebToolTests.fs" />
+    <Compile Include="Infrastructure/MessageToolTests.fs" />
+    <Compile Include="Infrastructure/FileSystemToolTests.fs" />
+    <Compile Include="Infrastructure/NotebookToolTests.fs" />
+    <Compile Include="Infrastructure/ShellToolTests.fs" />
+    <Compile Include="Infrastructure/SpawnToolTests.fs" />
+    <Compile Include="Infrastructure/MyToolTests.fs" />
+    <Compile Include="Infrastructure/StringUtilsTests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FsCheck.Xunit" Version="3.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BotSharp/BotSharp.fsproj" />
+  </ItemGroup>
+
+</Project>
