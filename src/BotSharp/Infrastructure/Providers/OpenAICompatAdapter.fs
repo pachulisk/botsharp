@@ -245,7 +245,7 @@ let private parseRetryAfter (resp: HttpResponseMessage) : TimeSpan option =
         // Fallback: parse the raw header value as an integer (seconds)
         match resp.Headers.TryGetValues("Retry-After") with
         | true, values ->
-            match Double.TryParse(Seq.head values) with
+            match Double.TryParse(Unchecked.nonNull values |> Seq.head) with
             | true, v when v > 0.0 -> Some (TimeSpan.FromSeconds v)
             | _ -> None
         | _ -> None

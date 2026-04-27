@@ -38,7 +38,7 @@ let private loadScratchpad (workspacePath: string) : Map<string, string> =
             use doc = JsonDocument.Parse(File.ReadAllText path)
             doc.RootElement.EnumerateObject()
             |> Seq.choose (fun p ->
-                if p.Value.ValueKind = JsonValueKind.String then Some (p.Name, p.Value.GetString())
+                if p.Value.ValueKind = JsonValueKind.String then Some (p.Name, p.Value.GetString() |> Unchecked.nonNull)
                 else None)
             |> Map.ofSeq
     with _ -> Map.empty

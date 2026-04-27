@@ -166,9 +166,9 @@ let ``GET / returns HTML WebUI`` () =
         use client = new HttpClient()
         let resp = client.GetAsync(sprintf "http://localhost:%d/" port).Result
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode)
-        let ct = resp.Content.Headers.ContentType
+        let ct = resp.Content.Headers.ContentType |> Unchecked.nonNull
         Assert.NotNull(ct)
-        Assert.StartsWith("text/html", ct.MediaType)
+        Assert.StartsWith("text/html", ct.MediaType |> Unchecked.nonNull)
         let body = resp.Content.ReadAsStringAsync().Result
         Assert.Contains("<title>BotSharp</title>", body)
         Assert.Contains("WebSocket", body)
@@ -201,9 +201,9 @@ let ``WS connection uses provided chat_id from query param`` () =
 let ``WS connection generates different chat_ids for different connections`` () =
     withWsServer "ignored" None (fun port ->
         use ws1 = connectWs port
-        let id1 = (recvJson ws1).GetProperty("chat_id").GetString()
+        let id1 = (recvJson ws1).GetProperty("chat_id").GetString() |> Unchecked.nonNull
         use ws2 = connectWs port
-        let id2 = (recvJson ws2).GetProperty("chat_id").GetString()
+        let id2 = (recvJson ws2).GetProperty("chat_id").GetString() |> Unchecked.nonNull
         Assert.NotEqual<string>(id1, id2)
     )
 
@@ -233,7 +233,7 @@ let ``sending a message produces delta and done events`` () =
             if t = "done" then isDone <- true
 
         // Should have at least one delta followed by done
-        let types = events |> List.map (fun e -> e.GetProperty("type").GetString())
+        let types = events |> List.map (fun e -> e.GetProperty("type").GetString() |> Unchecked.nonNull)
         Assert.Contains("done", types)
     )
 
@@ -436,14 +436,14 @@ let ``new_chat envelope creates a new chat_id`` () =
     withWsServer "ok" None (fun port ->
         use ws = connectWs port
         let ready = recvJson ws
-        let originalId = ready.GetProperty("chat_id").GetString()
+        let originalId = ready.GetProperty("chat_id").GetString() |> Unchecked.nonNull
 
         // Send new_chat envelope
         sendText ws """{"type":"new_chat"}"""
 
         let attached = recvJson ws
         Assert.Equal("attached", attached.GetProperty("type").GetString())
-        let newId = attached.GetProperty("chat_id").GetString()
+        let newId = attached.GetProperty("chat_id").GetString() |> Unchecked.nonNull
         // Should have generated a different chat_id
         Assert.NotEqual<string>(originalId, newId)
         Assert.False(String.IsNullOrWhiteSpace newId)

@@ -37,7 +37,7 @@ let private runGitBlame (workingDir: string) (relPath: string) : string option =
         psi.RedirectStandardError    <- true
         psi.UseShellExecute          <- false
         psi.CreateNoWindow           <- true
-        use proc = Process.Start(psi)
+        use proc = Process.Start(psi) |> Unchecked.nonNull
         let stdout = proc.StandardOutput.ReadToEnd()
         proc.WaitForExit()
         if proc.ExitCode = 0 && stdout.Length > 0 then Some stdout

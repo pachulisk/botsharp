@@ -61,7 +61,7 @@ let private validateSsrf (urlStr: string) : Result<string, string> =
                 // IP literals. Parsing directly ensures the check is always applied.
                 let literalAddr =
                     match IPAddress.TryParse(host) with
-                    | true, addr -> Some addr
+                    | true, addr -> Some (Unchecked.nonNull addr)
                     | false, _   -> None
                 match literalAddr |> Option.filter isPrivateIp with
                 | Some addr ->

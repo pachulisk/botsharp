@@ -46,7 +46,7 @@ let private abbreviateUrl (url: string) (maxLen: int) : string =
 
 /// Abbreviate a file path to ≤ maxLen chars, mirroring Python abbreviate_path.
 let abbreviatePath (path: string) (maxLen: int) : string =
-    if path = null || path = "" then path
+    if String.IsNullOrEmpty path then path
     elif path.StartsWith("http://") || path.StartsWith("https://") then
         abbreviateUrl path maxLen
     else
@@ -177,14 +177,15 @@ let formatToolHints (calls: ToolCall list) : string =
                         // Non-string types (numbers, booleans, arrays) are excluded from
                         // formatting so the fallback shows only the tool name.
                         if v.ValueKind = System.Text.Json.JsonValueKind.String then
-                            let s = v.GetString()
-                            if s <> null && s.Length > 0 then Some (k, s) else None
+                            let s = v.GetString() |> Unchecked.nonNull
+                            if s.Length > 0 then Some (k, s) else None
                         else None)
                     |> Map.ofSeq
-                match knownFormats.TryFind name with
-                | Some spec -> fmtKnown args spec name
-                | None when name.StartsWith("mcp_") -> fmtMcp args name
-                | None -> fmtFallback args name)
+                let nameStr = name |> Unchecked.nonNull
+                match knownFormats.TryFind nameStr with
+                | Some spec -> fmtKnown args spec nameStr
+                | None when nameStr.StartsWith("mcp_") -> fmtMcp args nameStr
+                | None -> fmtFallback args nameStr)
 
         // Deduplicate consecutive identical hints with × count
         let deduplicated =

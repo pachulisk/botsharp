@@ -15,7 +15,7 @@ open System.Text.RegularExpressions
 /// leaks occasionally emitted by reasoning models (DeepSeek R1, QwQ, Gemma 4).
 /// Mirrors Python nanobot.utils.helpers.strip_think.
 let stripThink (text: string) : string =
-    if isNull text || text = "" then text
+    if System.String.IsNullOrEmpty text then text
     else
         let mutable t = text
         // 1. Well-formed blocks (non-greedy: stop at first closing tag).

@@ -232,7 +232,7 @@ let ``POST /v1/chat/completions non-streaming returns correct OpenAI shape`` () 
         let body = chatBody false "hi"
         let resp = client.PostAsync(baseUrl + "/v1/chat/completions", body).Result
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode)
-        Assert.Equal("application/json; charset=utf-8", resp.Content.Headers.ContentType.ToString())
+        Assert.Equal("application/json; charset=utf-8", (Unchecked.nonNull resp.Content.Headers.ContentType).ToString())
         let respBody = resp.Content.ReadAsStringAsync().Result
         use doc = JsonDocument.Parse(respBody)
         let root = doc.RootElement
@@ -276,7 +276,7 @@ let ``POST /v1/chat/completions with stream=true returns text/event-stream`` () 
         let body = chatBody true "hi"
         let resp = client.PostAsync(baseUrl + "/v1/chat/completions", body).Result
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode)
-        let ct = resp.Content.Headers.ContentType.MediaType
+        let ct = (Unchecked.nonNull resp.Content.Headers.ContentType).MediaType |> Unchecked.nonNull
         Assert.Equal("text/event-stream", ct)
     )
 

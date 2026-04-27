@@ -306,7 +306,7 @@ type ApiServer(coordinator: AgentCoordinator, modelName: string, timeoutMs: int)
 
     let handleRequest (ctx: HttpListenerContext) : Async<unit> =
         async {
-            let path = ctx.Request.Url.AbsolutePath.TrimEnd('/')
+            let path = (Unchecked.nonNull ctx.Request.Url).AbsolutePath.TrimEnd('/')
             try
                 match ctx.Request.HttpMethod, path with
                 | "OPTIONS", _ ->

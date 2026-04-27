@@ -272,38 +272,40 @@ let private createStdioTransport
         psi.RedirectStandardOutput <- true
         psi.RedirectStandardError  <- true
         psi.UseShellExecute        <- false
-        let proc = Process.Start(psi)
-        let writer = proc.StandardInput
-        let reader = proc.StandardOutput
-        let sem  = new System.Threading.SemaphoreSlim(1, 1)
+        match Process.Start(psi) |> Option.ofObj with
+        | None -> Error "Process.Start returned null"
+        | Some proc ->
+            let writer = proc.StandardInput
+            let reader = proc.StandardOutput
+            let sem  = new System.Threading.SemaphoreSlim(1, 1)
 
-        let request (line: string) = async {
-            do! sem.WaitAsync() |> Async.AwaitTask
-            try
-                do! writer.WriteLineAsync(line) |> Async.AwaitTask
-                do! writer.FlushAsync() |> Async.AwaitTask
-                return! readNextResponse reader
-            finally
-                sem.Release() |> ignore
-        }
+            let request (line: string) = async {
+                do! sem.WaitAsync() |> Async.AwaitTask
+                try
+                    do! writer.WriteLineAsync(line) |> Async.AwaitTask
+                    do! writer.FlushAsync() |> Async.AwaitTask
+                    return! readNextResponse reader
+                finally
+                    sem.Release() |> ignore
+            }
 
-        // Notifications: write to stdin; no response expected.
-        let notify (line: string) = async {
-            do! sem.WaitAsync() |> Async.AwaitTask
-            try
-                do! writer.WriteLineAsync(line) |> Async.AwaitTask
-                do! writer.FlushAsync() |> Async.AwaitTask
-            finally
-                sem.Release() |> ignore
-        }
+            // Notifications: write to stdin; no response expected.
+            let notify (line: string) = async {
+                do! sem.WaitAsync() |> Async.AwaitTask
+                try
+                    do! writer.WriteLineAsync(line) |> Async.AwaitTask
+                    do! writer.FlushAsync() |> Async.AwaitTask
+                finally
+                    sem.Release() |> ignore
+            }
 
-        let dispose () =
-            try writer.Dispose() with _ -> ()
-            try if not proc.HasExited then proc.Kill() with _ -> ()
-            proc.Dispose()
-            sem.Dispose()
+            let dispose () =
+                try writer.Dispose() with _ -> ()
+                try if not proc.HasExited then proc.Kill() with _ -> ()
+                proc.Dispose()
+                sem.Dispose()
 
-        Ok { Request = request; Notify = notify; Dispose = dispose }
+            Ok { Request = request; Notify = notify; Dispose = dispose }
     with ex ->
         Error ex.Message
 

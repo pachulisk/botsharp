@@ -65,7 +65,8 @@ let private isInternalHost (host: string) : bool =
         // Try numeric IP
         match Net.IPAddress.TryParse(h) with
         | false, _ -> false
-        | true, addr ->
+        | true, addrMaybeNull ->
+            let addr = Unchecked.nonNull addrMaybeNull
             let b = addr.GetAddressBytes()
             match addr.AddressFamily with
             | Net.Sockets.AddressFamily.InterNetwork ->
@@ -96,7 +97,8 @@ let private cidrMatchesIPv4 (cidr: string) (addrBytes: byte[]) : bool =
     match cidr.Split('/') with
     | [| ipStr; prefixStr |] ->
         match Net.IPAddress.TryParse(ipStr.Trim()), Int32.TryParse(prefixStr.Trim()) with
-        | (true, baseAddr), (true, prefix) when prefix >= 0 && prefix <= 32 ->
+        | (true, baseAddrMaybeNull), (true, prefix) when prefix >= 0 && prefix <= 32 ->
+            let baseAddr = Unchecked.nonNull baseAddrMaybeNull
             let baseBytes = baseAddr.GetAddressBytes()
             if baseBytes.Length <> 4 || addrBytes.Length <> 4 then false
             else
@@ -122,7 +124,8 @@ let private isWhitelisted (ssrfWhitelist: string list) (host: string) : bool =
                 // CIDR match — only valid for numeric IPs
                 match Net.IPAddress.TryParse(h) with
                 | false, _ -> false
-                | true, addr ->
+                | true, addrMaybeNull ->
+                    let addr = Unchecked.nonNull addrMaybeNull
                     match addr.AddressFamily with
                     | Net.Sockets.AddressFamily.InterNetwork ->
                         cidrMatchesIPv4 e (addr.GetAddressBytes())
@@ -187,7 +190,7 @@ let internal wrapBwrap (command: string) (workspace: string) (cwd: string) : str
         parts.Add "--ro-bind-try"; parts.Add p; parts.Add p
     parts.AddRange [
         "--proc"; "/proc"; "--dev"; "/dev"; "--tmpfs"; "/tmp"
-        "--tmpfs"; IO.Path.GetDirectoryName(ws)  // mask parent (config dir)
+        "--tmpfs"; (IO.Path.GetDirectoryName(ws) |> Option.ofObj |> Option.defaultValue "/")  // mask parent (config dir)
         "--dir";  ws
         "--bind"; ws; ws
         "--chdir"; sandboxCwd

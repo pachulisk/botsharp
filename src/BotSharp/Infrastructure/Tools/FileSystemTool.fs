@@ -457,10 +457,10 @@ let private didYouMean (fullPath: string) (relPath: string) : string =
     let dir = Path.GetDirectoryName(fullPath) |> Option.ofObj |> Option.defaultValue ""
     if dir = "" || not (Directory.Exists dir) then ""
     else
-        let targetName = Path.GetFileName(relPath)
+        let targetName = Path.GetFileName(relPath) |> Unchecked.nonNull
         let suggestions =
             Directory.GetFiles(dir)
-            |> Array.map Path.GetFileName
+            |> Array.map (fun f -> Path.GetFileName(f) |> Unchecked.nonNull)
             |> Array.choose (fun name ->
                 let ratio = filenameSimilarity targetName name
                 if ratio >= 0.6 then Some (ratio, name) else None)
@@ -606,12 +606,12 @@ let readFile (workspacePath: string) (maxReadChars: int) (args: Map<string, Json
                     // Python uses pymupdf; F# has no PDF library dependency, so we return
                     // a descriptive stub rather than silently failing with "binary file".
                     if isPdf rawBytes then
-                        let ext = Path.GetExtension(relPath).ToLowerInvariant()
+                        let ext = (Path.GetExtension(relPath) |> Unchecked.nonNull).ToLowerInvariant()
                         return ToolSuccess $"(PDF file: {relPath}. PDF text extraction is not supported in this build. Convert to text with a PDF tool or use a PDF reader.)"
                     else
                     // Detect Office Open XML by ZIP magic bytes (.docx/.xlsx/.pptx).
                     if isOfficeOpenXml rawBytes then
-                        let ext = Path.GetExtension(relPath).ToLowerInvariant()
+                        let ext = (Path.GetExtension(relPath) |> Unchecked.nonNull).ToLowerInvariant()
                         let docType =
                             match ext with
                             | ".docx" -> "Word document"
@@ -824,7 +824,7 @@ let editFile (workspacePath: string) (args: Map<string, JsonElement>) : Async<To
                         // ── Trailing whitespace stripping (skip for markdown) ──────────────
                         // Mirrors Python's EditFileTool._strip_trailing_ws (skips .md/.mdx).
                         let markdownExt =
-                            let ext = Path.GetExtension(relPath).ToLowerInvariant()
+                            let ext = (Path.GetExtension(relPath) |> Unchecked.nonNull).ToLowerInvariant()
                             ext = ".md" || ext = ".mdx" || ext = ".markdown"
                         let newStr =
                             if markdownExt then newStr
@@ -1192,7 +1192,7 @@ let grep (workspacePath: string) (args: Map<string, JsonElement>) : Async<ToolRe
                             let passType =
                                 match ga.TypeFilter with
                                 | None   -> true
-                                | Some t -> matchesFileType t (Path.GetFileName(path))
+                                | Some t -> matchesFileType t (Path.GetFileName(path) |> Unchecked.nonNull)
                             passGlob && passType)
                         |> Seq.toList
                     else []

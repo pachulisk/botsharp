@@ -52,7 +52,7 @@ let private defaultChat    = ChatId    "cli-session"
 /// Infer MediaContent type from file extension (same heuristic as Python MessageTool).
 let private classifyMedia (path: string) : MediaContent =
     let lp  = LocalFilePath.ofAbsolute path
-    let ext = Path.GetExtension(path).ToLowerInvariant()
+    let ext = (Path.GetExtension(path) |> Unchecked.nonNull).ToLowerInvariant()
     match ext with
     | ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" | ".bmp" | ".tiff" | ".svg" ->
         ImageFile lp
@@ -89,7 +89,7 @@ let private parseButtonsArg (args: Map<string, JsonElement>) : Result<string lis
                                 if el.ValueKind <> JsonValueKind.String then
                                     Error (ParameterInvalid ("buttons", $"row {rowIdx} col {colIdx} must be a string"))
                                 else
-                                    Ok (el.GetString()))
+                                    Ok (el.GetString() |> Unchecked.nonNull))
                         labels |> List.fold (fun acc r ->
                             match acc, r with
                             | Ok xs, Ok x -> Ok (xs @ [x])

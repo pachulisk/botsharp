@@ -151,7 +151,7 @@ let ensureNonEmptyResult (toolName: ToolName) (result: ToolResult) : ToolResult 
     let (ToolName n) = toolName
     let placeholder  = $"({n} completed with no output)"
     match result with
-    | ToolSuccess text when text = null || text.Trim() = "" -> ToolSuccess placeholder
+    | ToolSuccess text when String.IsNullOrWhiteSpace text -> ToolSuccess placeholder
     | other -> other
 
 // ─── External lookup throttle ────────────────────────────────────────────────

@@ -1,5 +1,9 @@
 module BotSharp.Tests.Infrastructure.PurePropertyTests
 
+// FsCheck's NonNull<string> generic parameter triggers FS3261 false positives
+// under <Nullable>enable</Nullable> — suppress for this file only.
+#nowarn "3261"
+
 /// Property-based tests (FsCheck) for pure functions across the codebase.
 /// Each group targets a single module and tests mathematical invariants,
 /// not examples — confirming laws hold for all valid inputs.
@@ -16,28 +20,32 @@ open BotSharp.Infrastructure.Storage.CronStore
 open BotSharp.Infrastructure.Cron.CronService
 open BotSharp.Infrastructure.Input.InputParser
 
+/// FsCheck's NonNull<string>.Get returns ``string | null`` under --checknulls;
+/// the value is never null by construction, so assert non-null once here.
+let private nn (s: NonNull<string>) : string = Unchecked.nonNull s.Get
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DreamStore.makeSha — pure SHA-256 digest
 // ═══════════════════════════════════════════════════════════════════════════
 
 [<Property>]
 let ``makeSha always returns exactly 8 characters`` (s: NonNull<string>) : bool =
-    (makeSha s.Get).Length = 8
+    (makeSha (nn s)).Length = 8
 
 [<Property>]
 let ``makeSha output contains only lowercase hex characters`` (s: NonNull<string>) : bool =
-    makeSha s.Get |> Seq.forall (fun c -> "0123456789abcdef".Contains(c))
+    makeSha (nn s) |> Seq.forall (fun c -> "0123456789abcdef".Contains(c))
 
 [<Property>]
 let ``makeSha is deterministic: same input always produces same output`` (s: NonNull<string>) : bool =
-    makeSha s.Get = makeSha s.Get
+    makeSha (nn s) = makeSha (nn s)
 
 [<Property>]
 let ``makeSha two different strings almost never collide`` (a: NonNull<string>) (b: NonNull<string>) : bool =
     // SHA-256 with 8-char hex output has a ~1/4-billion collision chance per pair.
     // FsCheck won't generate a collision in practice; this property documents the intent.
     // When a = b the digests must be equal; when a ≠ b they almost certainly differ.
-    if a.Get = b.Get then makeSha a.Get = makeSha b.Get
+    if nn a = nn b then makeSha (nn a) = makeSha (nn b)
     else true   // we don't assert distinctness since birthday collisions exist in theory
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -181,9 +189,9 @@ let ``AsyncResult.map id preserves Ok values`` (n: int) : bool =
 
 [<Property>]
 let ``AsyncResult.map id preserves Error values`` (s: NonNull<string>) : bool =
-    let m = AsyncResult.ofResult (Error s.Get)
+    let m = AsyncResult.ofResult (Error (nn s))
     let r = (m |> AsyncResult.map (fun (x: int) -> x) |> Async.RunSynchronously)
-    r = Error s.Get
+    r = Error (nn s)
 
 [<Property>]
 let ``AsyncResult.map composition: map f >> map g = map (f >> g)`` (n: int) : bool =
@@ -196,9 +204,9 @@ let ``AsyncResult.map composition: map f >> map g = map (f >> g)`` (n: int) : bo
 
 [<Property>]
 let ``AsyncResult.mapError id preserves Error values`` (s: NonNull<string>) : bool =
-    let m = AsyncResult.ofResult (Error s.Get)
+    let m = AsyncResult.ofResult (Error (nn s))
     let r = m |> AsyncResult.mapError id |> Async.RunSynchronously
-    r = Error s.Get
+    r = Error (nn s)
 
 [<Property>]
 let ``AsyncResult.mapError does not affect Ok values`` (n: int) : bool =
@@ -213,7 +221,7 @@ let ``AsyncResult.mapError does not affect Ok values`` (n: int) : bool =
 [<Property>]
 let ``any non-slash string parses as ChatMessage`` (s: NonNull<string>) : bool =
     // Exclude strings starting with '/' — those go through the slash-command path.
-    let raw = s.Get
+    let raw = nn s
     if raw.StartsWith("/") then true   // skip; not under test
     else
         match parseUserInput raw with
@@ -223,7 +231,7 @@ let ``any non-slash string parses as ChatMessage`` (s: NonNull<string>) : bool =
 
 [<Property>]
 let ``parseUserInput never returns Error for any string`` (s: NonNull<string>) : bool =
-    match parseUserInput s.Get with
+    match parseUserInput (nn s) with
     | Ok _    -> true
     | Error _ -> false   // pChatMessage consumes everything — should never fail
 
@@ -294,9 +302,9 @@ let ``buildRequest last message is always UserMessage`` (n: NonNegativeInt) : bo
 let ``buildRequest system prompt text is embedded in the SystemMessage`` (s: NonNull<string>) : bool =
     // The system prompt string should appear verbatim in the SystemMessage content.
     let emptySnap = SessionSnapshot.empty (SessionId "s") DateTimeOffset.UtcNow
-    let req  = buildRequest s.Get emptySnap dummyInbound BotSharpConfig.defaults [] None
+    let req  = buildRequest (nn s) emptySnap dummyInbound BotSharpConfig.defaults [] None
     match List.head req.Messages with
-    | SystemMessage content -> content = s.Get
+    | SystemMessage content -> content = nn s
     | _                     -> false
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -332,17 +340,17 @@ let ``SessionSnapshot.append does not change lastConsolidated`` (n: NonNegativeI
 
 [<Property>]
 let ``ApiKey.create is Ok iff string is non-empty and non-whitespace`` (s: NonNull<string>) : bool =
-    let trimmed = s.Get.Trim()
+    let trimmed = (nn s).Trim()
     let expected = trimmed.Length > 0
-    match ApiKey.create s.Get with
+    match ApiKey.create (nn s) with
     | Ok _    -> expected
     | Error _ -> not expected
 
 [<Property>]
 let ``ApiKey.value round-trips the trimmed input`` (s: NonNull<string>) : bool =
-    let trimmed = s.Get.Trim()
+    let trimmed = (nn s).Trim()
     if trimmed.Length = 0 then true   // Error case — nothing to round-trip
     else
-        match ApiKey.create s.Get with
-        | Ok key  -> ApiKey.value key = s.Get   // ApiKey stores the original, not trimmed
+        match ApiKey.create (nn s) with
+        | Ok key  -> ApiKey.value key = nn s   // ApiKey stores the original, not trimmed
         | Error _ -> false

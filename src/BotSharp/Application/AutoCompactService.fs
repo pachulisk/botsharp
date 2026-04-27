@@ -35,7 +35,7 @@ let private sessionDir (workspacePath: string) : string =
 
 /// Derive a SessionId from a session filename (strips ".jsonl").
 let private sidFromFile (file: string) : SessionId =
-    SessionId (Path.GetFileNameWithoutExtension(file))
+    SessionId (Path.GetFileNameWithoutExtension(file) |> Unchecked.nonNull)
 
 /// One compaction pass: scan session files, skip active/recent ones, compact the rest.
 let private compactPass

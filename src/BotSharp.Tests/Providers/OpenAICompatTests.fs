@@ -166,7 +166,7 @@ let ``chat returns TextOnly on 200 response`` () =
     { "choices": [{ "message": { "role": "assistant", "content": "Hello!" },
                     "finish_reason": "stop" }],
       "usage": { "prompt_tokens": 5, "completion_tokens": 3, "cached_tokens": 0 } }"""
-    use client = makeClient (StubHandler(HttpStatusCode.OK, responseJson))
+    use client = makeClient (new StubHandler(HttpStatusCode.OK, responseJson))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -176,7 +176,7 @@ let ``chat returns TextOnly on 200 response`` () =
 
 [<Fact>]
 let ``chat returns RateLimited error on 429`` () =
-    use client = makeClient (StubHandler(HttpStatusCode.TooManyRequests, "Rate limit exceeded"))
+    use client = makeClient (new StubHandler(HttpStatusCode.TooManyRequests, "Rate limit exceeded"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -186,7 +186,7 @@ let ``chat returns RateLimited error on 429`` () =
 
 [<Fact>]
 let ``chat returns ServerError on 500`` () =
-    use client = makeClient (StubHandler(HttpStatusCode.InternalServerError, "Internal error"))
+    use client = makeClient (new StubHandler(HttpStatusCode.InternalServerError, "Internal error"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -196,7 +196,7 @@ let ``chat returns ServerError on 500`` () =
 
 [<Fact>]
 let ``chat returns ContextTooLong on 413`` () =
-    use client = makeClient (StubHandler(HttpStatusCode.RequestEntityTooLarge, "Too large"))
+    use client = makeClient (new StubHandler(HttpStatusCode.RequestEntityTooLarge, "Too large"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -213,7 +213,7 @@ let ``chatStream emits TextDelta events`` () =
     let chunk1 = """data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}"""
     let chunk2 = """data: {"choices":[{"delta":{"content":" world"},"finish_reason":null}]}"""
     let done_  = "data: [DONE]"
-    use client = makeClient (SseHandler [chunk1; chunk2; done_])
+    use client = makeClient (new SseHandler([chunk1; chunk2; done_]))
     let events = System.Collections.Generic.List<StreamEvent>()
     let emitter evt = async { events.Add(evt) }
     let result =
@@ -230,7 +230,7 @@ let ``chatStream emits TextDelta events`` () =
 
 [<Fact>]
 let ``chatStream returns RateLimited on 429`` () =
-    use client = makeClient (StubHandler(HttpStatusCode.TooManyRequests, "limit"))
+    use client = makeClient (new StubHandler(HttpStatusCode.TooManyRequests, "limit"))
     let result =
         chatStream client baseUrl dummyKey model Map.empty settings messages [] false (fun _ -> async { () })
         |> Async.RunSynchronously
@@ -274,7 +274,7 @@ let ``UserMessage with ImageFile sends content array with image_url block`` () =
         // First block: image_url
         let imgBlock = content.[0]
         Assert.Equal("image_url", imgBlock.GetProperty("type").GetString())
-        let url = imgBlock.GetProperty("image_url").GetProperty("url").GetString()
+        let url = imgBlock.GetProperty("image_url").GetProperty("url").GetString() |> Option.ofObj |> Option.defaultValue ""
         Assert.True(url.StartsWith("data:image/jpeg;base64,"), $"Expected JPEG data URL, got: {url.[..40]}")
         // Last block: text
         let textBlock = content.[content.GetArrayLength() - 1]
@@ -327,7 +327,7 @@ let ``resolve returns None when no API key is set`` () =
 
 [<Fact>]
 let ``chat returns ConnectionFailed on 401 Unauthorized`` () =
-    use client = makeClient (StubHandler(HttpStatusCode.Unauthorized, "Invalid API key"))
+    use client = makeClient (new StubHandler(HttpStatusCode.Unauthorized, "Invalid API key"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -338,7 +338,7 @@ let ``chat returns ConnectionFailed on 401 Unauthorized`` () =
 
 [<Fact>]
 let ``chat returns ModelNotFound on 404`` () =
-    use client = makeClient (StubHandler(HttpStatusCode.NotFound, "Model not found"))
+    use client = makeClient (new StubHandler(HttpStatusCode.NotFound, "Model not found"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -349,7 +349,7 @@ let ``chat returns ModelNotFound on 404`` () =
 [<Fact>]
 let ``chat returns MalformedResponse when JSON schema is wrong`` () =
     // 200 OK with valid JSON that lacks the required 'choices' field → schema error → MalformedResponse
-    use client = makeClient (StubHandler(HttpStatusCode.OK, """{"error":"unexpected"}"""))
+    use client = makeClient (new StubHandler(HttpStatusCode.OK, """{"error":"unexpected"}"""))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -364,7 +364,7 @@ let ``chat returns MalformedResponse when JSON schema is wrong`` () =
 [<Fact>]
 let ``chat returns MalformedResponse on 400 Bad Request`` () =
     // classifyHttpError 400 → MalformedResponse (SchemaError ("request", body))
-    use client = makeClient (StubHandler(HttpStatusCode.BadRequest, "bad request body"))
+    use client = makeClient (new StubHandler(HttpStatusCode.BadRequest, "bad request body"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -375,7 +375,7 @@ let ``chat returns MalformedResponse on 400 Bad Request`` () =
 [<Fact>]
 let ``chat returns ConnectionFailed on 403 Forbidden`` () =
     // classifyHttpError 403 → ConnectionFailed "Unauthorized (HTTP 403)"
-    use client = makeClient (StubHandler(HttpStatusCode.Forbidden, "forbidden"))
+    use client = makeClient (new StubHandler(HttpStatusCode.Forbidden, "forbidden"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -387,7 +387,7 @@ let ``chat returns ConnectionFailed on 403 Forbidden`` () =
 [<Fact>]
 let ``chat returns ServerError 503 on 503 response`` () =
     // classifyHttpError for s >= 500 → ServerError s (tests the wildcard branch)
-    use client = makeClient (StubHandler(HttpStatusCode.ServiceUnavailable, "service unavailable"))
+    use client = makeClient (new StubHandler(HttpStatusCode.ServiceUnavailable, "service unavailable"))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -569,7 +569,7 @@ let ``UserMessage with PNG ImageFile sends image_url block with image/png MIME t
         let content = doc.RootElement.GetProperty("messages").[0].GetProperty("content")
         Assert.Equal(JsonValueKind.Array, content.ValueKind)
         let imgBlock = content.[0]
-        let url = imgBlock.GetProperty("image_url").GetProperty("url").GetString()
+        let url = imgBlock.GetProperty("image_url").GetProperty("url").GetString() |> Option.ofObj |> Option.defaultValue ""
         Assert.True(url.StartsWith("data:image/png;base64,"), $"Expected PNG data URL, got: {url.[..40]}")
     finally
         if System.IO.File.Exists(tmp) then System.IO.File.Delete(tmp)
@@ -635,7 +635,7 @@ let ``chatStream with DataLine producing no event continues without emitting`` (
     // A chunk with null delta content → parseStreamChunk returns Ok None → loop continues silently
     let chunk = """data: {"choices":[{"delta":{},"finish_reason":null}]}"""
     let done_ = "data: [DONE]"
-    use client = makeClient (SseHandler [chunk; done_])
+    use client = makeClient (new SseHandler([chunk; done_]))
     let events = System.Collections.Generic.List<StreamEvent>()
     let emitter evt = async { events.Add(evt) }
     let result =
@@ -659,7 +659,7 @@ let ``chat extracts reasoning_content from message object`` () =
                                  "reasoning_content": "Let me think step by step\u2026" },
                     "finish_reason": "stop" }],
       "usage": { "prompt_tokens": 5, "completion_tokens": 10, "cached_tokens": 0 } }"""
-    use client = makeClient (StubHandler(HttpStatusCode.OK, responseJson))
+    use client = makeClient (new StubHandler(HttpStatusCode.OK, responseJson))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -677,7 +677,7 @@ let ``chat sets ReasoningContent to None when absent from response`` () =
     { "choices": [{ "message": { "role": "assistant", "content": "hello" },
                     "finish_reason": "stop" }],
       "usage": { "prompt_tokens": 5, "completion_tokens": 3, "cached_tokens": 0 } }"""
-    use client = makeClient (StubHandler(HttpStatusCode.OK, responseJson))
+    use client = makeClient (new StubHandler(HttpStatusCode.OK, responseJson))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []
         |> Async.RunSynchronously
@@ -697,7 +697,7 @@ let ``chat HTTP 429 with Retry-After header produces RateLimited with Some TimeS
     // When the server returns 429 with a Retry-After: 20 header, the error kind
     // must be RateLimited (Some 20s) so the retry policy can honour the hint.
     use client =
-        makeClient (StubHandlerWithRetryAfter(HttpStatusCode.TooManyRequests,
+        makeClient (new StubHandlerWithRetryAfter(HttpStatusCode.TooManyRequests,
                                               """{"error":{"message":"Rate limit exceeded"}}""",
                                               20.0))
     let result =
@@ -715,7 +715,7 @@ let ``chat HTTP 429 with Retry-After header produces RateLimited with Some TimeS
 let ``chat HTTP 429 without Retry-After header produces RateLimited with None`` () =
     // No Retry-After header → retryAfter = None (exponential backoff used instead)
     use client =
-        makeClient (StubHandler(HttpStatusCode.TooManyRequests,
+        makeClient (new StubHandler(HttpStatusCode.TooManyRequests,
                                 """{"error":{"message":"Rate limit exceeded"}}"""))
     let result =
         chat client baseUrl dummyKey model Map.empty settings messages []

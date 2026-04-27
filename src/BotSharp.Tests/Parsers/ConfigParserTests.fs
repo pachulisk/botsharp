@@ -258,7 +258,6 @@ let ``ws invalid port yields error`` () =
     match parseJson json with
     | Error errs -> Assert.True(errs.Length > 0, "Expected error for out-of-range port")
     | Ok cfg     -> Assert.Fail($"Expected Error for port 99999, got Ok: {cfg.Ws}")
-    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
 
 // ── base_urls ────────────────────────────────────────────────────────────────
 

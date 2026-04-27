@@ -132,8 +132,8 @@ let execNotebookEdit
                 | Insert ->
                     let nb   = makeEmptyNotebook ()
                     let cell = newCell newSource cellType true
-                    (nb["cells"] :?> JsonArray).Add(cell)
-                    Directory.CreateDirectory(Path.GetDirectoryName(fullPath)) |> ignore
+                    (Unchecked.nonNull nb["cells"] :?> JsonArray).Add(cell)
+                    Directory.CreateDirectory(Unchecked.nonNull (Path.GetDirectoryName(fullPath))) |> ignore
                     let json = nb.ToJsonString(JsonSerializerOptions(WriteIndented = true))
                     do! File.WriteAllTextAsync(fullPath, json) |> Async.AwaitTask
                     return ToolSuccess $"Successfully created {fullPath} with 1 cell"
@@ -144,7 +144,7 @@ let execNotebookEdit
             // ── Load existing notebook ────────────────────────────────
             let! text = File.ReadAllTextAsync(fullPath) |> Async.AwaitTask
             let parsed =
-                try Some (JsonNode.Parse(text) :?> JsonObject)
+                try Some (Unchecked.nonNull (JsonNode.Parse(text)) :?> JsonObject)
                 with _ -> None
             match parsed with
             | None -> return ToolSuccess $"Error: Failed to parse notebook: {rawPath}"
@@ -152,14 +152,14 @@ let execNotebookEdit
 
             let cells =
                 match nb.TryGetPropertyValue("cells") with
-                | true, arr -> arr :?> JsonArray
+                | true, arr -> Unchecked.nonNull arr :?> JsonArray
                 | _         ->
                     let arr = JsonArray()
                     nb["cells"] <- arr
                     arr
 
-            let nbformat      = match nb.TryGetPropertyValue("nbformat") with | true, v -> v.GetValue<int>() | _ -> 0
-            let nbformatMinor = match nb.TryGetPropertyValue("nbformat_minor") with | true, v -> v.GetValue<int>() | _ -> 0
+            let nbformat      = match nb.TryGetPropertyValue("nbformat") with | true, v -> (Unchecked.nonNull v).GetValue<int>() | _ -> 0
+            let nbformatMinor = match nb.TryGetPropertyValue("nbformat_minor") with | true, v -> (Unchecked.nonNull v).GetValue<int>() | _ -> 0
             let generateId    = nbformat >= 4 && nbformatMinor >= 5
 
             // ── Apply edit mode (exhaustive DU match) ─────────────────
@@ -191,12 +191,12 @@ let execNotebookEdit
                     return ToolSuccess
                         $"Error: cell_index {cellIndex} out of range (notebook has {cells.Count} cells)"
                 else
-                    let cell = cells.[cellIndex] :?> JsonObject
+                    let cell = Unchecked.nonNull cells.[cellIndex] :?> JsonObject
                     cell["source"] <- JsonValue.Create(newSource)
                     // Update cell type if changed
                     let existingType =
                         match cell.TryGetPropertyValue("cell_type") with
-                        | true, v -> v.GetValue<string>()
+                        | true, v -> (Unchecked.nonNull v).GetValue<string>()
                         | _       -> "code"
                     let newTypeStr = match cellType with Code -> "code" | Markdown -> "markdown"
                     if existingType <> newTypeStr then

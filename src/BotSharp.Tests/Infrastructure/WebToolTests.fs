@@ -112,7 +112,7 @@ let ``webSearch with no API key falls back to DuckDuckGo and returns ToolSuccess
     let html = ddgResultHtml "Test Result" "example.com" "A useful snippet."
     use handler = new MockDdgHandler(html)
     use client  = new HttpClient(handler)
-    let args    = Map.ofList [ "query", JsonSerializer.Deserialize<JsonElement>("\"hello world\"") ]
+    let args    = Map.ofList [ "query", JsonDocument.Parse("\"hello world\"").RootElement.Clone() ]
     let result  = webSearch None None 5 "" "" client args |> Async.RunSynchronously
     match result with
     | ToolSuccess output ->
@@ -124,7 +124,7 @@ let ``webSearch DuckDuckGo fallback includes snippet text`` () =
     let html = ddgResultHtml "My Title" "mysite.com" "My useful snippet here."
     use handler = new MockDdgHandler(html)
     use client  = new HttpClient(handler)
-    let args    = Map.ofList [ "query", JsonSerializer.Deserialize<JsonElement>("\"test query\"") ]
+    let args    = Map.ofList [ "query", JsonDocument.Parse("\"test query\"").RootElement.Clone() ]
     let result  = webSearch None None 5 "" "" client args |> Async.RunSynchronously
     match result with
     | ToolSuccess output ->
@@ -136,7 +136,7 @@ let ``webSearch DuckDuckGo fallback with empty response returns no-results`` () 
     // Empty DuckDuckGo HTML — no result blocks → "No results found"
     use handler = new MockDdgHandler("<html><body></body></html>")
     use client  = new HttpClient(handler)
-    let args    = Map.ofList [ "query", JsonSerializer.Deserialize<JsonElement>("\"obscure query\"") ]
+    let args    = Map.ofList [ "query", JsonDocument.Parse("\"obscure query\"").RootElement.Clone() ]
     let result  = webSearch None None 5 "" "" client args |> Async.RunSynchronously
     match result with
     | ToolSuccess output -> Assert.Contains("No results", output)
@@ -1036,7 +1036,7 @@ let ``webFetchSpec has optional extract_mode parameter`` () =
 type private MockJinaDispatchHandler(jinaJson: string, directBody: string, jinaStatus: HttpStatusCode) =
     inherit HttpMessageHandler()
     override _.SendAsync(req: HttpRequestMessage, _ct: CancellationToken) : Task<HttpResponseMessage> =
-        let url = req.RequestUri.ToString()
+        let url = (Unchecked.nonNull req.RequestUri).ToString()
         let resp =
             if url.Contains("r.jina.ai") then
                 let r = new HttpResponseMessage(jinaStatus)

@@ -180,7 +180,7 @@ let private parseMediaItems (items: JsonElement list) : Result<MediaItem list, I
             | (item: JsonElement) :: rest ->
                 match item.TryGetProperty("data_url") with
                 | true, el when el.ValueKind = JsonValueKind.String ->
-                    match parseMediaItem (el.GetString()) with
+                    match parseMediaItem (el.GetString() |> Unchecked.nonNull) with
                     | Result.Error e -> Result.Error e
                     | Result.Ok mi   -> loop (mi :: acc) rest
                 | _ -> Result.Error Malformed
@@ -248,15 +248,16 @@ let private parseEnvelope (raw: string) : InboundEnvelope option =
                 | "attach" ->
                     let cid =
                         match root.TryGetProperty("chat_id") with
-                        | true, el when el.ValueKind = JsonValueKind.String -> el.GetString()
-                        | _ -> null
+                        | true, el when el.ValueKind = JsonValueKind.String ->
+                            el.GetString() |> Unchecked.nonNull
+                        | _ -> ""
                     if String.IsNullOrWhiteSpace cid then None
                     else Some (AttachChat cid)
                 | "message" ->
                     let content =
                         match root.TryGetProperty("content") with
                         | true, el when el.ValueKind = JsonValueKind.String ->
-                            el.GetString() |> Option.ofObj |> Option.defaultValue ""
+                            el.GetString() |> Unchecked.nonNull
                         | _ -> ""
                     let chatId =
                         match root.TryGetProperty("chat_id") with
@@ -599,7 +600,7 @@ let private dispatchRequest
     (ctx           : HttpListenerContext)
     : Async<unit> =
     async {
-        let path = ctx.Request.Url.AbsolutePath.TrimEnd('/')
+        let path = (Unchecked.nonNull ctx.Request.Url).AbsolutePath.TrimEnd('/')
         try
             match ctx.Request.HttpMethod, path with
 
