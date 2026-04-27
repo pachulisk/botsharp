@@ -279,7 +279,7 @@ let ``parseSessionFile with one valid and one invalid line returns Error`` () =
     let valid  = serializeMessage (AssistantMessage ("ok", None))
     let invalid = "not json {"
     match parseSessionFile sid [valid; invalid] with
-    | Error errs -> Assert.NotEmpty(errs)
+    | Error _errs -> () // NonEmptyList guarantees at least one error by construction
     | Ok snap    -> Assert.Fail($"Expected Error, got Ok with {SessionSnapshot.messageCount snap} messages")
 
 // ═══════════════════════════════════════════════════════════════════════════

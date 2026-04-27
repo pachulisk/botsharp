@@ -90,7 +90,8 @@ let private parseUsage (el: JsonElement) : TokenUsage =
 let parseLlmResponse (el: JsonElement) : Result<LLMResponse, ParseError> =
     result {
         let! choices = requireArray "choices" el
-        if choices.IsEmpty then
+        match choices with
+        | [] ->
             return {
                 Body = Empty
                 ReasoningContent = None
@@ -98,8 +99,7 @@ let parseLlmResponse (el: JsonElement) : Result<LLMResponse, ParseError> =
                 Usage = { PromptTokens = 0; CompletionTokens = 0; CachedTokens = 0 }
                 FinishReason = None
             }
-        else
-            let first = List.head choices
+        | first :: _ ->
             let! msg  = requireObject "message" first
 
             // content is a nullable string in OpenAI format
@@ -220,11 +220,11 @@ let parseStreamChunk (el: JsonElement) : Result<StreamEvent option, ParseError> 
             return tryParseUsageChunk el
         | true, choicesEl ->
             let choices = choicesEl.EnumerateArray() |> Seq.cast<JsonElement> |> Seq.toList
-            if choices.IsEmpty then
+            match choices with
+            | [] ->
                 // Empty choices array — final usage chunk with stream_options.include_usage.
                 return tryParseUsageChunk el
-            else
-                let first = List.head choices
+            | first :: _ ->
                 match first.TryGetProperty("delta") with
                 | false, _ -> return None
                 | true, delta ->
@@ -258,9 +258,9 @@ let parseStreamChunk (el: JsonElement) : Result<StreamEvent option, ParseError> 
                     match delta.TryGetProperty("tool_calls") with
                     | true, tc when tc.ValueKind = JsonValueKind.Array ->
                         let calls = tc.EnumerateArray() |> Seq.cast<JsonElement> |> Seq.toList
-                        if calls.IsEmpty then return None
-                        else
-                            let callEl = List.head calls
+                        match calls with
+                        | [] -> return None
+                        | callEl :: _ ->
                             let idx =
                                 match callEl.TryGetProperty("index") with
                                 | true, v when v.ValueKind = JsonValueKind.Number -> v.GetInt32()

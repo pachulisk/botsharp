@@ -245,9 +245,10 @@ let private parseRetryAfter (resp: HttpResponseMessage) : TimeSpan option =
         // Fallback: parse the raw header value as an integer (seconds)
         match resp.Headers.TryGetValues("Retry-After") with
         | true, values ->
-            match Double.TryParse(Unchecked.nonNull values |> Seq.head) with
-            | true, v when v > 0.0 -> Some (TimeSpan.FromSeconds v)
-            | _ -> None
+            match Unchecked.nonNull values |> Seq.tryHead |> Option.bind (fun s ->
+                match Double.TryParse(s) with true, v when v > 0.0 -> Some v | _ -> None) with
+            | Some v -> Some (TimeSpan.FromSeconds v)
+            | None   -> None
         | _ -> None
 
 let private classifyHttpError (statusCode: int) (body: string) (retryAfter: TimeSpan option) : LlmError =

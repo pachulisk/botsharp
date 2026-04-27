@@ -10,7 +10,7 @@ open BotSharp.Infrastructure.Providers.ProviderRegistry
 // ═══════════════════════════════════════════════════════════════════════════
 
 let private openaiSpec =
-    providers |> List.find (fun s -> s.Id = "openai")
+    providers |> NonEmptyList.toList |> List.find (fun s -> s.Id = "openai")
 
 let private testKey =
     match ApiKey.create "test-key" with
@@ -275,13 +275,13 @@ let ``resolveContextWindow returns 8192 for gemma`` () =
 
 [<Fact>]
 let ``resolveBaseUrl for anthropic returns anthropic API URL by default`` () =
-    let spec = providers |> List.find (fun s -> s.Id = "anthropic")
+    let spec = providers |> NonEmptyList.toList |> List.find (fun s -> s.Id = "anthropic")
     let url  = resolveBaseUrl spec BotSharpConfig.defaults
     Assert.Equal("https://api.anthropic.com/v1", url)
 
 [<Fact>]
 let ``resolveBaseUrl for deepseek returns deepseek API URL by default`` () =
-    let spec = providers |> List.find (fun s -> s.Id = "deepseek")
+    let spec = providers |> NonEmptyList.toList |> List.find (fun s -> s.Id = "deepseek")
     let url  = resolveBaseUrl spec BotSharpConfig.defaults
     Assert.Equal("https://api.deepseek.com/v1", url)
 
@@ -292,7 +292,7 @@ let ``resolveBaseUrl for deepseek returns deepseek API URL by default`` () =
 [<Fact>]
 let ``resolve falls back to openai (first provider) when DefaultProvider is unknown`` () =
     // config.DefaultProvider = "no-such-provider" is not in the providers list.
-    // providers |> List.tryFind ... returns None → Option.defaultValue (List.head providers).
+    // providers |> NonEmptyList.tryFind ... returns None → Option.defaultValue (NonEmptyList.head providers).
     // The first provider in the list is "openai".
     use client = new HttpClient()
     let config = { BotSharpConfig.defaults with

@@ -52,12 +52,6 @@ let private parseMcpServer (name: string) (el: JsonElement) : Result<string * Mc
         let toolTimeout  = tryGetInt  "tool_timeout"  el |> Option.defaultValue 30
                            |> fun v -> if v <= 0 then 30 else v
         let enabledTools =
-            tryGetArray "enabled_tools" el
-            |> Option.defaultValue [ JsonDocument.Parse("""["*"]""").RootElement.EnumerateArray() |> Seq.head ]
-            |> List.choose (fun v ->
-                if v.ValueKind = JsonValueKind.String then v.GetString() |> Option.ofObj else None)
-        // Default to ["*"] when the array is absent entirely
-        let enabledTools =
             match tryGetArray "enabled_tools" el with
             | None -> ["*"]
             | Some arr ->

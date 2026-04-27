@@ -102,6 +102,11 @@ module NonEmptyList =
     let map f nel        = { Head = f nel.Head; Tail = List.map f nel.Tail }
     let head nel         = nel.Head
 
+    /// Find the first element matching pred, or None.
+    let tryFind (pred: 'T -> bool) (nel: NonEmptyList<'T>) : 'T option =
+        if pred nel.Head then Some nel.Head
+        else List.tryFind pred nel.Tail
+
     /// Convert a list — returns Error if empty.
     let ofList = function
         | []      -> Error "List must not be empty"

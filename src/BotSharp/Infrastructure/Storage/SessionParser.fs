@@ -177,11 +177,11 @@ let parseMessageLine (el: JsonElement) : Result<Message, ParseError> =
     }
 
 /// Parse a sequence of JSONL lines into a SessionSnapshot.
-/// Collects all per-line errors (returning Error list on failure).
+/// Collects all per-line errors (returning NonEmptyList on failure).
 let parseSessionFile
     (id      : SessionId)
     (lines   : string seq)
-    : Result<SessionSnapshot, ParseError list> =
+    : Result<SessionSnapshot, NonEmptyList<ParseError>> =
 
     let now = DateTimeOffset.UtcNow
     let errors  = System.Collections.Generic.List<ParseError>()
@@ -199,11 +199,11 @@ let parseSessionFile
                 errors.Add(JsonParseError (ex.Message, 0))
 
     if errors.Count > 0 then
-        Error (errors |> Seq.toList)
+        Error (errors |> Seq.toList |> NonEmptyList.ofListUnsafe)
     else
         let msgList = messages |> Seq.toList
         // SessionSnapshot.create can only fail if lastConsolidated is out of range;
         // we start with 0 which is always valid.
         match SessionSnapshot.create id msgList 0 now now with
         | Ok snap  -> Ok snap
-        | Error msg -> Error [ SchemaError ("session", msg) ]
+        | Error msg -> Error (NonEmptyList.singleton (SchemaError ("session", msg)))

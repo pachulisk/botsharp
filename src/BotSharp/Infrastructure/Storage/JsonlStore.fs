@@ -46,7 +46,7 @@ let loadSession
                 match parseSessionFile sid lines with
                 | Result.Ok snap   -> return Result.Ok snap
                 | Result.Error errs ->
-                    let first = List.head errs
+                    let first = NonEmptyList.head errs
                     return Result.Error (ParseFailure first)
             with ex ->
                 return Result.Error (WriteFailure ex.Message)

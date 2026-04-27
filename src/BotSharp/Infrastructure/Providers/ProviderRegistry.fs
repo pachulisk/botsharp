@@ -16,117 +16,116 @@ open BotSharp.Infrastructure.Providers.OpenAICompatAdapter
 // falls through to the configured default provider.
 // ═══════════════════════════════════════════════════════════════════════════
 
-let providers : ProviderSpec list = [
+let providers : NonEmptyList<ProviderSpec> =
     // ── Standard providers (matched by model-name keyword) ──────────────────
+    NonEmptyList.create
+        { Id           = "openai"
+          Keywords     = [ "gpt-"; "o1-"; "o3-"; "o4-" ]
+          Backend      = OpenAICompatBackend
+          IsGateway    = false
+          Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming; StreamUsageTracking ]
+          ThinkingStyle = Some ReasoningEffortParam
+          EnvKeyName   = "OPENAI_API_KEY" }
+        [ { Id           = "anthropic"
+            Keywords     = [ "claude" ]
+            Backend      = OpenAICompatBackend   // Anthropic has an OpenAI-compat endpoint
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "ANTHROPIC_API_KEY" }
 
-    { Id           = "openai"
-      Keywords     = [ "gpt-"; "o1-"; "o3-"; "o4-" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming; StreamUsageTracking ]
-      ThinkingStyle = Some ReasoningEffortParam
-      EnvKeyName   = "OPENAI_API_KEY" }
+          { Id           = "deepseek"
+            Keywords     = [ "deepseek-v4-"; "deepseek-r"; "deepseek-chat"; "deepseek-reasoner"; "deepseek" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; ExtendedThinking; Streaming; StreamUsageTracking ]
+            ThinkingStyle = Some ReasoningSplit
+            EnvKeyName   = "DEEPSEEK_API_KEY" }
 
-    { Id           = "anthropic"
-      Keywords     = [ "claude" ]
-      Backend      = OpenAICompatBackend   // Anthropic has an OpenAI-compat endpoint
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "ANTHROPIC_API_KEY" }
+          { Id           = "gemini"
+            Keywords     = [ "gemini" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "GEMINI_API_KEY" }
 
-    { Id           = "deepseek"
-      Keywords     = [ "deepseek-v4-"; "deepseek-r"; "deepseek-chat"; "deepseek-reasoner"; "deepseek" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; ExtendedThinking; Streaming; StreamUsageTracking ]
-      ThinkingStyle = Some ReasoningSplit
-      EnvKeyName   = "DEEPSEEK_API_KEY" }
+          { Id           = "dashscope"
+            Keywords     = [ "qwen" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "DASHSCOPE_API_KEY" }
 
-    { Id           = "gemini"
-      Keywords     = [ "gemini" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "GEMINI_API_KEY" }
+          { Id           = "moonshot"
+            Keywords     = [ "moonshot"; "kimi" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "MOONSHOT_API_KEY" }
 
-    { Id           = "dashscope"
-      Keywords     = [ "qwen" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; VisionInput; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "DASHSCOPE_API_KEY" }
+          { Id           = "minimax"
+            Keywords     = [ "minimax" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "MINIMAX_API_KEY" }
 
-    { Id           = "moonshot"
-      Keywords     = [ "moonshot"; "kimi" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "MOONSHOT_API_KEY" }
+          { Id           = "zhipu"
+            Keywords     = [ "glm"; "zai" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "ZAI_API_KEY" }
 
-    { Id           = "minimax"
-      Keywords     = [ "minimax" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "MINIMAX_API_KEY" }
+          { Id           = "groq"
+            Keywords     = [ "llama"; "mixtral-8x7b"; "gemma"; "groq" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "GROQ_API_KEY" }
 
-    { Id           = "zhipu"
-      Keywords     = [ "glm"; "zai" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "ZAI_API_KEY" }
+          // ── Gateways (detected by model prefix or API key, route any model) ─────
 
-    { Id           = "groq"
-      Keywords     = [ "llama"; "mixtral-8x7b"; "gemma"; "groq" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "GROQ_API_KEY" }
+          { Id           = "openrouter"
+            Keywords     = [ "openrouter" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = true
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "OPENROUTER_API_KEY" }
 
-    // ── Gateways (detected by model prefix or API key, route any model) ─────
+          { Id           = "siliconflow"
+            Keywords     = [ "siliconflow" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = true
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "OPENAI_API_KEY" }
 
-    { Id           = "openrouter"
-      Keywords     = [ "openrouter" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = true
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "OPENROUTER_API_KEY" }
+          { Id           = "aihubmix"
+            Keywords     = [ "aihubmix" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = true
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "OPENAI_API_KEY" }
 
-    { Id           = "siliconflow"
-      Keywords     = [ "siliconflow" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = true
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "OPENAI_API_KEY" }
+          // ── Local deployment ─────────────────────────────────────────────────────
 
-    { Id           = "aihubmix"
-      Keywords     = [ "aihubmix" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = true
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "OPENAI_API_KEY" }
-
-    // ── Local deployment ─────────────────────────────────────────────────────
-
-    { Id           = "ollama"
-      Keywords     = [ "ollama" ]
-      Backend      = OpenAICompatBackend
-      IsGateway    = false
-      Capabilities = Set.ofList [ FunctionCalling; Streaming ]
-      ThinkingStyle = None
-      EnvKeyName   = "" }       // Ollama doesn't require an API key
-]
+          { Id           = "ollama"
+            Keywords     = [ "ollama" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "" }       // Ollama doesn't require an API key
+        ]
 
 /// Known base URLs for each provider (used when no custom base_url is set)
 let private baseUrls : Map<string, string> =
@@ -217,7 +216,7 @@ let resolveContextWindow (model: string) : int =
 /// Returns None if no spec matches (caller should use the default provider).
 let detectProvider (model: string) : ProviderSpec option =
     let lowerModel = model.ToLowerInvariant()
-    providers |> List.tryFind (fun spec ->
+    providers |> NonEmptyList.tryFind (fun spec ->
         spec.Keywords |> List.exists (fun kw -> lowerModel.Contains(kw.ToLowerInvariant())))
 
 /// Resolve the base URL for a provider.
@@ -274,6 +273,6 @@ let resolve
         | Some s -> s
         | None   ->
             // Fall back to configured default provider
-            providers |> List.tryFind (fun s -> s.Id = config.DefaultProvider)
-            |> Option.defaultValue (List.head providers)
+            providers |> NonEmptyList.tryFind (fun s -> s.Id = config.DefaultProvider)
+            |> Option.defaultValue (NonEmptyList.head providers)
     buildProvider client model spec config
