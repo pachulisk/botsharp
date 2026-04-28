@@ -31,11 +31,16 @@ open BotSharp.Infrastructure.Tools.McpTool
 // ═══════════════════════════════════════════════════════════════════════════
 // Entry point
 //
+// Subcommands:
+//   gateway              Start headless gateway server (no CLI, API + WS + channels)
+//
 // Flags:
 //   --model <name>       Override default model from config
 //   --workspace <path>   Override workspace path from config
+//   --port <port>        Gateway port (gateway subcommand only, default 18790)
 //   --api-port <port>    Start OpenAI-compatible HTTP API on given port
 //   --ws-port <port>     Start WebSocket server on given port
+//   --verbose / -v       Verbose output (gateway subcommand only)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Find a flag value in argv: --flag value → Some value
@@ -45,8 +50,17 @@ let private findFlag (flag: string) (argv: string[]) : string option =
     |> Array.tryFind (fun (k, _) -> k = flag)
     |> Option.map snd
 
+/// Check if a bare flag (no value) is present in argv.
+let private hasFlag (flag: string) (argv: string[]) : bool =
+    argv |> Array.exists (fun a -> a = flag)
+
 [<EntryPoint>]
 let main argv =
+    // ── Subcommand detection ─────────────────────────────────────────────────
+    let isGateway = argv.Length > 0 && argv.[0] = "gateway"
+    // Strip "gateway" from argv so flag parsing works uniformly
+    let argv = if isGateway then argv.[1..] else argv
+
     // ── Parse CLI flags ───────────────────────────────────────────────────────
     let modelFlag     = findFlag "--model"     argv
     let workspaceFlag = findFlag "--workspace" argv
@@ -56,6 +70,11 @@ let main argv =
     let wsPortFlag    =
         findFlag "--ws-port" argv
         |> Option.bind (fun s -> match Int32.TryParse(s) with true, n -> Some n | _ -> None)
+    let gatewayPortFlag =
+        findFlag "--port" argv
+        |> Option.orElse (findFlag "-p" argv)
+        |> Option.bind (fun s -> match Int32.TryParse(s) with true, n -> Some n | _ -> None)
+    let verbose = hasFlag "--verbose" argv || hasFlag "-v" argv
 
     // ── Load or bootstrap configuration ──────────────────────────────────────
     // If the config file does not yet exist, run the first-run wizard so the
@@ -408,8 +427,8 @@ This file stores important information that persists across sessions.
         PersistSession    = fun snap -> persistSession snap wp
         BuildSystemPrompt = buildSystemPrompt config.DisabledSkills config.SystemPromptAppend
         Config            = config
-        StreamHook        = cliStreamHook
-        Hook              = cliAgentHook true config.SendToolHints   // streaming CLI; hints gated by SendToolHints
+        StreamHook        = if isGateway then NoStreaming else cliStreamHook
+        Hook              = if isGateway then AgentHook.none else cliAgentHook true config.SendToolHints
         CronService       = Some cronSvc
         LastTokenUsage    = ref None   // overridden per session actor in createSessionActor
         CurrentIteration  = ref 0
@@ -423,53 +442,22 @@ This file stores important information that persists across sessions.
         return ()
     }
     spawnRouteRef <- routeRef   // subagent announcements go through the same coordinator
-    let port = createCliPort ()
-    // Point MessageTool's send callback at the real CLI port.
-    sendRef <- port.Send
 
-    // ── API server (optional) ─────────────────────────────────────────────────
-    // When --api-port is specified or api_port is set in config, start an
-    // OpenAI-compatible HTTP API that accepts POST /v1/chat/completions.
-    // CLI flag takes priority over config file port.
-    let apiServerOpt =
-        let effectiveApiPort =
-            match apiPortFlag with
-            | Some p -> Some p          // CLI --api-port takes priority
-            | None   -> config.ApiPort  // fall back to config file api_port
-        match effectiveApiPort with
-        | Some port ->
-            let timeoutMs = config.ApiTimeoutSeconds * 1_000
-            let apiDeps = { deps with StreamHook = NoStreaming }
-            let apiCoordinator = AgentCoordinator(apiDeps)
-            let server = ApiServer(apiCoordinator, config.DefaultModel, timeoutMs)
-            Async.Start(server.Start(port, config.ApiHost))
-            Some server
-        | None -> None
+    // ── API server (start function, shared by both modes) ─────────────────────
+    let startApiServer (port: int) (host: string) =
+        let timeoutMs = config.ApiTimeoutSeconds * 1_000
+        let apiDeps = { deps with StreamHook = NoStreaming }
+        let apiCoordinator = AgentCoordinator(apiDeps)
+        let server = ApiServer(apiCoordinator, config.DefaultModel, timeoutMs)
+        Async.Start(server.Start(port, host))
+        server
 
-    // ── WebSocket server (optional) ───────────────────────────────────────────
-    // --ws-port flag takes priority over config.Ws.Port.
-    // Token always comes from config.Ws.Token (no CLI flag for the token).
-    // The WsCoordinator creates per-connection streaming hooks; baseDeps uses
-    // NoStreaming as a placeholder (overridden at connection time).
-    let wsServerOpt =
-        let wsEffective =
-            match wsPortFlag with
-            | Some port ->
-                // CLI flag: use flag port; take token from config if ws section exists
-                let wsToken = config.Ws |> Option.bind (fun w -> w.Token) |> Option.map ApiKey.value
-                Some (port, wsToken)
-            | None ->
-                // No CLI flag: use config.Ws if present and enabled
-                config.Ws
-                |> Option.filter (fun w -> w.Enabled)
-                |> Option.map (fun w -> w.Port, w.Token |> Option.map ApiKey.value)
-        match wsEffective with
-        | Some (port, wsToken) ->
-            let wsDeps = { deps with StreamHook = NoStreaming }   // hook overridden per-connection
-            let server = WsServer(wsDeps, wsToken)
-            Async.Start(server.Start(port))
-            Some server
-        | None -> None
+    // ── WS server (start function, shared by both modes) ──────────────────────
+    let startWsServer (port: int) (token: string option) =
+        let wsDeps = { deps with StreamHook = NoStreaming }
+        let server = WsServer(wsDeps, token)
+        Async.Start(server.Start(port))
+        server
 
     // ── HeartbeatService ──────────────────────────────────────────────────────
     let heartbeatSvc =
@@ -496,7 +484,9 @@ This file stores important information that persists across sessions.
                         | Result.Error _                 -> None
                 }),
             onNotify = (fun text ->
-                async { printfn "\n[heartbeat] %s" text }),
+                async {
+                    if verbose then eprintfn "[heartbeat] %s" text
+                }),
             intervalSeconds = config.HeartbeatIntervalSeconds)
     if config.HeartbeatEnabled then
         heartbeatSvc.Start()
@@ -537,13 +527,9 @@ This file stores important information that persists across sessions.
             dreamCts.Token)
 
     // ── AutoCompactService (optional) ─────────────────────────────────────────
-    // Proactively consolidates sessions idle for more than `session_ttl_minutes`.
-    // When SessionTtlMinutes = 0 (default), auto-compact is disabled.
-    // Falls back to a heuristic (MemoryWindowSize × 5) if only MemoryWindowSize is set
-    // and SessionTtlMinutes is 0, matching the previous behaviour for existing configs.
     let autoCompactTtl =
         if config.SessionTtlMinutes > 0 then config.SessionTtlMinutes
-        elif config.MemoryWindowSize > 0 then 0   // explicit 0 = disabled (use proper config)
+        elif config.MemoryWindowSize > 0 then 0
         else 0
     let autoCompactSvc =
         BotSharp.Application.AutoCompactService.AutoCompactService(
@@ -552,27 +538,121 @@ This file stores important information that persists across sessions.
             autoCompactTtl)
     autoCompactSvc.Start()
 
-    printfn "BotSharp — model: %s" config.DefaultModel
-    printfn "Workspace:  %s" config.WorkspacePath
-    printfn "Type /help for commands, Ctrl-D (EOF) to exit."
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Mode dispatch: gateway (headless) vs CLI (interactive)
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    // ── Conditionally start Telegram alongside CLI ────────────────────────────
-    // When telegram is configured: both channels run concurrently.
-    // The CLI loop is sequential (blocking RunSynchronously); Telegram is
-    // started in the background and cancelled when the CLI exits.
-    match config.Telegram with
-    | Some tgConfig ->
-        printfn "[Telegram] Starting bot..."
-        use cts = new System.Threading.CancellationTokenSource()
-        Async.Start(startTelegram tgConfig deps httpClient cts.Token, cts.Token)
-        startCli coordinator port deps |> Async.RunSynchronously
-        cts.Cancel()
-    | None ->
-        // CLI only — sequential request/response loop
-        startCli coordinator port deps |> Async.RunSynchronously
+    if isGateway then
+        // ── Gateway mode ─────────────────────────────────────────────────────
+        // Headless server — no stdin, no CLI loop.
+        // Starts API + WS + Telegram channels, blocks until Ctrl-C.
+        let gatewayPort = gatewayPortFlag |> Option.defaultValue 18790
+        let apiHost     = config.ApiHost
 
-    apiServerOpt |> Option.iter (fun s -> s.Stop())
-    wsServerOpt  |> Option.iter (fun s -> s.Stop())
-    autoCompactSvc.Stop()
-    disposeMcp ()
-    0
+        // API server: --port sets the default; --api-port overrides if given
+        let apiPort = apiPortFlag |> Option.defaultValue gatewayPort
+        let apiServer = startApiServer apiPort apiHost
+
+        // WS server: only if explicitly configured (--ws-port or config)
+        let wsServerOpt =
+            let wsEffective =
+                match wsPortFlag with
+                | Some port ->
+                    let wsToken = config.Ws |> Option.bind (fun w -> w.Token) |> Option.map ApiKey.value
+                    Some (port, wsToken)
+                | None ->
+                    config.Ws
+                    |> Option.filter (fun w -> w.Enabled)
+                    |> Option.map (fun w -> w.Port, w.Token |> Option.map ApiKey.value)
+            match wsEffective with
+            | Some (port, wsToken) -> Some (startWsServer port wsToken)
+            | None -> None
+
+        // Telegram: start if configured
+        let tgCts = new System.Threading.CancellationTokenSource()
+        match config.Telegram with
+        | Some tgConfig ->
+            Async.Start(startTelegram tgConfig deps httpClient tgCts.Token, tgCts.Token)
+            printfn "[gateway] Telegram channel started"
+        | None -> ()
+
+        // MessageTool send — log to stderr in gateway mode (no CLI port)
+        sendRef <- fun msg -> async {
+            if verbose then eprintfn "[message] → %s:%s  %s"
+                                        (let (ChannelId c) = msg.Channel in c)
+                                        (let (ChatId ch) = msg.Chat in ch)
+                                        msg.Content
+        }
+
+        // Banner
+        printfn "BotSharp gateway — model: %s" config.DefaultModel
+        printfn "Workspace:  %s" config.WorkspacePath
+        printfn "API server: http://%s:%d/v1/chat/completions" apiHost apiPort
+        wsServerOpt |> Option.iter (fun _ ->
+            let wsPort = wsPortFlag |> Option.orElse (config.Ws |> Option.map (fun w -> w.Port)) |> Option.defaultValue 9090
+            printfn "WS server:  ws://%s:%d/ws" apiHost wsPort)
+        printfn "Press Ctrl-C to stop."
+
+        // Block until Ctrl-C
+        let exitEvent = new System.Threading.ManualResetEventSlim(false)
+        Console.CancelKeyPress.Add(fun e ->
+            e.Cancel <- true
+            printfn "\nShutting down..."
+            exitEvent.Set())
+        exitEvent.Wait()
+
+        // Teardown
+        tgCts.Cancel()
+        apiServer.Stop()
+        wsServerOpt |> Option.iter (fun s -> s.Stop())
+        autoCompactSvc.Stop()
+        disposeMcp ()
+        0
+
+    else
+        // ── CLI mode (original behaviour) ────────────────────────────────────
+        let port = createCliPort ()
+        sendRef <- port.Send
+
+        let apiServerOpt =
+            let effectiveApiPort =
+                match apiPortFlag with
+                | Some p -> Some p
+                | None   -> config.ApiPort
+            match effectiveApiPort with
+            | Some port -> Some (startApiServer port config.ApiHost)
+            | None -> None
+
+        let wsServerOpt =
+            let wsEffective =
+                match wsPortFlag with
+                | Some port ->
+                    let wsToken = config.Ws |> Option.bind (fun w -> w.Token) |> Option.map ApiKey.value
+                    Some (port, wsToken)
+                | None ->
+                    config.Ws
+                    |> Option.filter (fun w -> w.Enabled)
+                    |> Option.map (fun w -> w.Port, w.Token |> Option.map ApiKey.value)
+            match wsEffective with
+            | Some (port, wsToken) -> Some (startWsServer port wsToken)
+            | None -> None
+
+        printfn "BotSharp — model: %s" config.DefaultModel
+        printfn "Workspace:  %s" config.WorkspacePath
+        printfn "Type /help for commands, Ctrl-D (EOF) to exit."
+
+        match config.Telegram with
+        | Some tgConfig ->
+            printfn "[Telegram] Starting bot..."
+            use cts = new System.Threading.CancellationTokenSource()
+            Async.Start(startTelegram tgConfig deps httpClient cts.Token, cts.Token)
+            startCli coordinator port deps |> Async.RunSynchronously
+            cts.Cancel()
+        | None ->
+            startCli coordinator port deps |> Async.RunSynchronously
+
+        apiServerOpt |> Option.iter (fun s -> s.Stop())
+        wsServerOpt  |> Option.iter (fun s -> s.Stop())
+        autoCompactSvc.Stop()
+        disposeMcp ()
+        0
