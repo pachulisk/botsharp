@@ -53,8 +53,9 @@ Your workspace is at: {workspacePath}
 - Before modifying a file, read it first. Do not assume files exist.
 - If a tool call fails, analyse the error before retrying.
 - Ask for clarification when the request is ambiguous.
+- When you create a file the user needs (e.g., via write_file), send it using the 'message' tool with the 'media' parameter containing the absolute file path.
 
-Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel."""
+Reply directly with text for conversations. Use the 'message' tool to send to a specific chat channel or to deliver file attachments via the 'media' parameter."""
 
 /// Channel-specific formatting guidance injected into the system prompt.
 /// Mirrors Python's identity.md Jinja template conditional for channel.

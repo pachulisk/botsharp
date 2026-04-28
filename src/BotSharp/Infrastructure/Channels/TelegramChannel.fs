@@ -298,6 +298,84 @@ let private extractMedia
     }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// § 6b  Outbound media — send files/images/audio/video to Telegram
+//
+// Used by the MessageTool send callback when OutboundMessage has Attachments.
+// InputFileStream(stream, fileName) passes the filename to Telegram, which
+// auto-detects MIME type from the extension — avoids the application/octet-stream bug.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Send a single MediaContent item to a Telegram chat.
+let sendMediaContent
+    (bot    : ITelegramBotClient)
+    (chatId : int64)
+    (media  : MediaContent)
+    : Async<Result<unit, string>> =
+    async {
+        let path = match media with ImageFile p | AudioFile p | DocumentFile p | VideoFile p -> LocalFilePath.value p
+        if not (IO.File.Exists path) then
+            return Error $"File not found: {path}"
+        else
+            let fi = IO.FileInfo(path)
+            // Telegram limits: 10 MB photos, 50 MB documents/audio/video
+            let limitMb = match media with ImageFile _ -> 10L | _ -> 50L
+            if fi.Length > limitMb * 1024L * 1024L then
+                return Error $"File too large ({fi.Length / 1024L / 1024L} MB, limit {limitMb} MB): {path}"
+            else
+                try
+                    use stream = IO.File.OpenRead(path)
+                    let fileName = IO.Path.GetFileName(path)
+                    let inputFile = Telegram.Bot.Types.InputFileStream(stream, fileName)
+                    let tgChat = TgChatId(chatId)
+                    match media with
+                    | ImageFile _ ->
+                        do! bot.SendPhoto(tgChat, inputFile) |> Async.AwaitTask |> Async.Ignore
+                    | AudioFile _ ->
+                        let ext = (IO.Path.GetExtension(path) |> Unchecked.nonNull).ToLowerInvariant()
+                        if ext = ".ogg" then
+                            do! bot.SendVoice(tgChat, inputFile) |> Async.AwaitTask |> Async.Ignore
+                        else
+                            do! bot.SendAudio(tgChat, inputFile) |> Async.AwaitTask |> Async.Ignore
+                    | VideoFile _ ->
+                        do! bot.SendVideo(tgChat, inputFile) |> Async.AwaitTask |> Async.Ignore
+                    | DocumentFile _ ->
+                        do! bot.SendDocument(tgChat, inputFile) |> Async.AwaitTask |> Async.Ignore
+                    return Ok ()
+                with ex ->
+                    return Error $"Telegram send error: {ex.Message}"
+    }
+
+/// Send an OutboundMessage to Telegram — text content + file attachments.
+let sendOutboundMessage
+    (bot   : ITelegramBotClient)
+    (tgCfg : TelegramConfig)
+    (msg   : OutboundMessage)
+    : Async<unit> =
+    async {
+        let (ChatId chatStr) = msg.Chat
+        match Int64.TryParse(chatStr) with
+        | false, _ ->
+            eprintfn "[Telegram] Cannot parse chat ID '%s' as int64, skipping send" chatStr
+        | true, chatId ->
+            // Send text content
+            if not (String.IsNullOrWhiteSpace msg.Content) then
+                let html = markdownToHtml msg.Content
+                try
+                    do! bot.SendMessage(TgChatId(chatId), html, parseMode = ParseMode.Html)
+                        |> Async.AwaitTask |> Async.Ignore
+                with _ ->
+                    try
+                        do! bot.SendMessage(TgChatId(chatId), msg.Content)
+                            |> Async.AwaitTask |> Async.Ignore
+                    with ex -> eprintfn "[Telegram] SendMessage error: %s" ex.Message
+            // Send attachments
+            for media in msg.Attachments do
+                match! sendMediaContent bot chatId media with
+                | Ok ()      -> ()
+                | Error desc -> eprintfn "[Telegram] %s" desc
+    }
+
+// ═══════════════════════════════════════════════════════════════════════════
 // § 7  TelegramCoordinator
 //
 // Creates per-chat AgentDependencies with a chat-specific StreamingHook so
@@ -749,6 +827,7 @@ let startTelegram
     (baseDeps   : AgentDependencies)
     (httpClient : HttpClient)
     (ct         : CancellationToken)
+    (onBotReady : ITelegramBotClient -> TelegramConfig -> unit)
     : Async<unit> =
     async {
         let tokenStr = TelegramBotToken.value tgCfg.Token
@@ -768,6 +847,7 @@ let startTelegram
             | null -> ""
             | u    -> u
         printfn "[Telegram] Bot @%s is running." botUsername
+        onBotReady bot tgCfg
 
         let coordinator = TelegramCoordinator(baseDeps, bot, tgCfg)
         let mediaGroups = ConcurrentDictionary<string, MediaGroupState>()

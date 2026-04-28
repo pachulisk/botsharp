@@ -344,6 +344,9 @@ This file stores important information that persists across sessions.
     let mutable sendRef : (OutboundMessage -> Async<unit>) =
         fun msg -> async { printfn "\nassistant> %s" msg.Content }  // CLI fallback
 
+    // Telegram outbound send — set by startTelegram's onBotReady callback once the bot is initialised.
+    let mutable telegramSendOpt : (OutboundMessage -> Async<unit>) option = None
+
     let msgToolPair =
         BotSharp.Infrastructure.Tools.MessageTool.allTools (fun msg -> sendRef msg)
 
@@ -572,16 +575,23 @@ This file stores important information that persists across sessions.
         let tgCts = new System.Threading.CancellationTokenSource()
         match config.Telegram with
         | Some tgConfig ->
-            Async.Start(startTelegram tgConfig deps httpClient tgCts.Token, tgCts.Token)
+            Async.Start(
+                startTelegram tgConfig deps httpClient tgCts.Token
+                    (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg)),
+                tgCts.Token)
             printfn "[gateway] Telegram channel started"
         | None -> ()
 
-        // MessageTool send — log to stderr in gateway mode (no CLI port)
+        // MessageTool send — route to Telegram when channel=telegram, else log
         sendRef <- fun msg -> async {
-            if verbose then eprintfn "[message] → %s:%s  %s"
-                                        (let (ChannelId c) = msg.Channel in c)
-                                        (let (ChatId ch) = msg.Chat in ch)
-                                        msg.Content
+            let (ChannelId ch) = msg.Channel
+            if ch = "telegram" then
+                match telegramSendOpt with
+                | Some tgSend -> do! tgSend msg
+                | None -> eprintfn "[message] Telegram not ready, dropping message"
+            else
+                if verbose then eprintfn "[message] -> %s:%s  %s"
+                                            ch (let (ChatId c) = msg.Chat in c) msg.Content
         }
 
         // Banner
@@ -612,7 +622,15 @@ This file stores important information that persists across sessions.
     else
         // ── CLI mode (original behaviour) ────────────────────────────────────
         let port = createCliPort ()
-        sendRef <- port.Send
+        sendRef <- fun msg -> async {
+            let (ChannelId ch) = msg.Channel
+            if ch = "telegram" then
+                match telegramSendOpt with
+                | Some tgSend -> do! tgSend msg
+                | None -> do! port.Send msg
+            else
+                do! port.Send msg
+        }
 
         let apiServerOpt =
             let effectiveApiPort =
@@ -645,7 +663,10 @@ This file stores important information that persists across sessions.
         | Some tgConfig ->
             printfn "[Telegram] Starting bot..."
             use cts = new System.Threading.CancellationTokenSource()
-            Async.Start(startTelegram tgConfig deps httpClient cts.Token, cts.Token)
+            Async.Start(
+                startTelegram tgConfig deps httpClient cts.Token
+                    (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg)),
+                cts.Token)
             startCli coordinator port deps |> Async.RunSynchronously
             cts.Cancel()
         | None ->
