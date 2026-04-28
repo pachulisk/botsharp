@@ -82,6 +82,14 @@ let providers : NonEmptyList<ProviderSpec> =
             ThinkingStyle = None
             EnvKeyName   = "ZAI_API_KEY" }
 
+          { Id           = "xiaomi-mimo"
+            Keywords     = [ "mimo" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; ExtendedThinking; Streaming ]
+            ThinkingStyle = Some ReasoningSplit
+            EnvKeyName   = "MIMO_API_KEY" }
+
           { Id           = "groq"
             Keywords     = [ "llama"; "mixtral-8x7b"; "gemma"; "groq" ]
             Backend      = OpenAICompatBackend
@@ -140,6 +148,7 @@ let private baseUrls : Map<string, string> =
         "moonshot",    "https://api.moonshot.ai/v1"
         "minimax",     "https://api.minimax.io/v1"
         "zhipu",       "https://open.bigmodel.cn/api/paas/v4"
+        "xiaomi-mimo", "https://token-plan-cn.xiaomimimo.com/v1"
         "siliconflow", "https://api.siliconflow.cn/v1"
         "aihubmix",    "https://aihubmix.com/v1"
         "ollama",      "http://localhost:11434/v1"
@@ -193,6 +202,12 @@ let private knownContextWindows : (string * int) list = [
     "llama",            32_768
     "mixtral",          32_768
     "gemma",             8_192
+    // Xiaomi MiMo
+    "mimo-v2.5-pro",     1_048_576
+    "mimo-v2-pro",       1_048_576
+    "mimo-v2-omni",        262_144
+    "mimo-v2-flash",       262_144
+    "mimo",                262_144
     // Moonshot / Kimi
     "moonshot-v1-128k",  128_000
     "moonshot",          128_000
