@@ -168,17 +168,19 @@ let needsConsolidation (snap: SessionSnapshot) (config: BotSharpConfig) : bool =
         SessionSnapshot.messageCount snap - SessionSnapshot.lastConsolidated snap
     unconsolidatedCount >= config.MemoryWindowSize
 
-/// Run consolidation if needed.
-/// - Asks the LLM to call save_memory (structured output via tool call)
-/// - Writes to workspace/memory/HISTORY.md and workspace/memory/MEMORY.md
-/// - Returns Consolidated(historyEntry, Some memoryUpdate, newLastIndex) on success
-/// - Returns ConsolidationSkipped when not enough unconsolidated messages
-let consolidate
+/// Internal: run consolidation with optional force flag.
+/// force = true: consolidate ALL messages regardless of MemoryWindowSize threshold.
+///   Used by /new (mirrors nanobot's _consolidate_memory(archive_all=True)).
+let private consolidateImpl
+    (force : bool)
     (snap  : SessionSnapshot)
     (deps  : AgentDependencies)
     : AsyncResult<ConsolidationResult, AgentError> =
     asyncResult {
-        if not (needsConsolidation snap deps.Config) then
+        let hasMessages = SessionSnapshot.messageCount snap > SessionSnapshot.lastConsolidated snap
+        if not force && not (needsConsolidation snap deps.Config) then
+            return ConsolidationSkipped
+        elif not hasMessages then
             return ConsolidationSkipped
         else
             let wp          = deps.Config.WorkspacePath
@@ -247,3 +249,19 @@ let consolidate
 
             return Consolidated (historyEntry, Some memoryUpdate, newIndex)
     }
+
+/// Run consolidation if the unconsolidated message count exceeds MemoryWindowSize.
+let consolidate
+    (snap  : SessionSnapshot)
+    (deps  : AgentDependencies)
+    : AsyncResult<ConsolidationResult, AgentError> =
+    consolidateImpl false snap deps
+
+/// Force-consolidate ALL unconsolidated messages regardless of threshold.
+/// Used by /new to archive the conversation before clearing the session.
+/// Mirrors nanobot's _consolidate_memory(archive_all=True).
+let forceConsolidate
+    (snap  : SessionSnapshot)
+    (deps  : AgentDependencies)
+    : AsyncResult<ConsolidationResult, AgentError> =
+    consolidateImpl true snap deps

@@ -109,6 +109,27 @@ let createSessionActor
                     return! loop (Some newSnap) newSummary
 
             | ProcessInput (inbound, channel) ->
+                // /new: force-consolidate all messages → clear session → return early.
+                // Mirrors nanobot's _consolidate_memory(archive_all=True) + session.clear().
+                match inbound.Input with
+                | Command NewSession ->
+                    let sid = sessionId inbound
+                    // Load old session and archive all messages to MEMORY.md + HISTORY.md
+                    let! loadResult = deps'.LoadSession sid
+                    match loadResult with
+                    | Result.Ok oldSnap ->
+                        let! _ = forceConsolidate oldSnap deps'
+                        // Clear the session: persist an empty snapshot (overwrites the JSONL file)
+                        let emptySnap = SessionSnapshot.empty sid DateTimeOffset.UtcNow
+                        let! _ = deps'.PersistSession emptySnap
+                        channel.Reply (Result.Ok ("New session started.", emptySnap))
+                        return! loop (Some emptySnap) None
+                    | Result.Error _ ->
+                        // No existing session — just create empty
+                        let emptySnap = SessionSnapshot.empty sid DateTimeOffset.UtcNow
+                        channel.Reply (Result.Ok ("New session started.", emptySnap))
+                        return! loop (Some emptySnap) None
+                | _ -> ()
                 // Consume pendingSummary this turn (inject into runtime context, then clear).
                 let! result = runAgentLoop inbound deps' pendingSummary
                 match result with
