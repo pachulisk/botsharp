@@ -49,6 +49,11 @@
     <Compile Include="Infrastructure/Tools/MyTool.fs" />
     <Compile Include="Infrastructure/Tools/McpTool.fs" />
     <Compile Include="Infrastructure/Tools/ToolHints.fs" />
+
+    <!-- CLIPS rule engine -->
+    <Compile Include="Infrastructure/Rules/ClipsNative.fs" />
+    <Compile Include="Infrastructure/Rules/ClipsEnvironment.fs" />
+    <Compile Include="Infrastructure/Rules/RuleEngine.fs" />
     <Compile Include="Infrastructure/Channels/ChannelBase.fs" />
     <Compile Include="Infrastructure/Channels/CliChannel.fs" />
     <Compile Include="Infrastructure/Channels/MarkdownParser.fs" />
@@ -84,6 +89,11 @@
   <ItemGroup>
     <PackageReference Include="FParsec"       Version="1.1.1" />
     <PackageReference Include="Telegram.Bot"  Version="21.*"  />
+  </ItemGroup>
+
+  <!-- CLIPS native library (built via Native/build-clips.sh) -->
+  <ItemGroup Condition="Exists('runtimes')">
+    <Content Include="runtimes/**/libclips.*" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -34,6 +34,7 @@ type private TgFile    = Telegram.Bot.Types.File
 type StreamState =
     | NotStarted
     | Streaming of MsgId: int * Accumulated: string * LastEdit: DateTimeOffset
+    | Completed
 
 // ═══════════════════════════════════════════════════════════════════════════
 // § 2  Small pure helpers
@@ -130,7 +131,7 @@ let private onStreamDelta
     : Async<unit> =
     async {
         match !stateRef with
-        | NotStarted ->
+        | NotStarted | Completed ->
             try
                 let replyParams : ReplyParameters =
                     match !replyToRef with
@@ -166,7 +167,7 @@ let private onStreamEnd
     : Async<unit> =
     async {
         match !stateRef with
-        | NotStarted -> ()
+        | NotStarted | Completed -> ()
         | Streaming (msgId, accumulated, _) ->
             let finalHtml = markdownToHtml accumulated
             let! success =
@@ -195,7 +196,7 @@ let private onStreamEnd
                 with _ -> ()
             | None -> ()
 
-            stateRef := NotStarted
+            stateRef := Completed
     }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -411,12 +412,16 @@ type TelegramCoordinator(baseDeps: AgentDependencies, bot: ITelegramBotClient, t
         async {
             let sid   = sessionIdForTelegram chatId
             let actor = this.GetOrCreate(sid, chatId)
+            // Reset stream state so we can distinguish "never streamed" from "completed".
+            let stateRef = streamStates.GetOrAdd(chatId, fun _ -> ref NotStarted)
+            stateRef.Value <- NotStarted
             let! result = actor.PostAndAsyncReply(fun ch -> ProcessInput(inbound, ch))
             match result with
             | Result.Ok (text, _) ->
                 let agentResult =
-                    if tgCfg.Streaming then StreamedResponse text
-                    else PlainResponse text
+                    match stateRef.Value with
+                    | Completed -> StreamedResponse text   // streaming happened, text already sent
+                    | _         -> PlainResponse text      // no streaming (rule engine stop, etc.)
                 return Result.Ok agentResult
             | Result.Error e -> return Result.Error e
         }

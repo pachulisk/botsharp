@@ -60,7 +60,8 @@ let private mkDeps (reply: string) : AgentDependencies =
       CronService       = None
       Hook              = AgentHook.none
       LastTokenUsage    = ref None
-      CurrentIteration  = ref 0 }
+      CurrentIteration  = ref 0
+      RuleEngine        = None }
 
 /// AgentDependencies backed by a provider that always returns an LLM error.
 let private mkErrorDeps () : AgentDependencies =

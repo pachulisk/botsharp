@@ -27,6 +27,7 @@ type AgentDependencies = {
     CronService       : BotSharp.Infrastructure.Cron.CronService.CronService option
     LastTokenUsage    : TokenUsage option ref      // written after each LLM call; read by my tool
     CurrentIteration  : int ref                    // written at start of each AwaitingLLM step; read by my tool
+    RuleEngine        : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option
 }
 
 let private liftStorage (m: Async<Result<'a, StorageError>>) : AsyncResult<'a, AgentError> =
@@ -970,9 +971,40 @@ let rec private iterate
                             | WorkspaceViolation p      -> $"[Access denied: {p}]"
                     SessionSnapshot.append (ToolResultMessage (call.Id, call.Tool, content)) s
                 ) snap
+            // Rule engine: assert tool results and check for triggered actions.
+            let ruleStop =
+                match deps.RuleEngine with
+                | None -> None
+                | Some engine ->
+                    let iter = match state with ExecutingTools (_, _, i) -> i | _ -> 0
+                    results |> List.iter (fun (call, result) ->
+                        let (ToolName toolName) = call.Tool
+                        let status, errorStr =
+                            match result with
+                            | ToolSuccess _ -> "success", ""
+                            | ToolFailure e ->
+                                match e with
+                                | ToolNotFound (ToolName n)  -> "failure", $"Tool not found: {n}"
+                                | ParameterMissing f         -> "failure", $"Missing parameter: {f}"
+                                | ParameterInvalid (f, r)    -> "failure", $"Invalid parameter {f}: {r}"
+                                | ExecutionFailed msg        -> "failure", msg
+                                | ExecutionTimeout t         -> "failure", $"Timed out after {t.TotalSeconds}s"
+                                | WorkspaceViolation p       -> "failure", $"Access denied: {p}"
+                        BotSharp.Infrastructure.Rules.RuleEngine.assertToolResult engine toolName status errorStr iter)
+                    let actions = BotSharp.Infrastructure.Rules.RuleEngine.evaluate engine
+                    actions |> List.tryPick (function
+                        | BotSharp.Infrastructure.Rules.RuleEngine.StopLoop reason -> Some reason
+                        | _ -> None)
             // Reset lengthRecoveries to 0 when entering a new tool round.
             // externalLookupCounts is shared across rounds (not reset here).
-            return! iterate deps snap' (transition state (ToolsExecuted results)) iterIdx 0 0 externalLookupCounts
+            let nextState =
+                match ruleStop with
+                | Some reason ->
+                    eprintfn "[RuleEngine] %s" reason
+                    Finalizing (reason, None)
+                | None ->
+                    transition state (ToolsExecuted results)
+            return! iterate deps snap' nextState iterIdx 0 0 externalLookupCounts
 
         | Finalizing (text, rcOpt) ->
             // Apply the FinalizeContent pipeline — a hook may transform or suppress the reply.
@@ -1055,6 +1087,8 @@ let runAgentLoop
         let state0 = transition Idle (MessageReceived inbound)
         let state1 = transition state0 (PromptBuilt req)
 
+        // Reset rule engine facts for the new turn (rules are preserved).
+        deps.RuleEngine |> Option.iter BotSharp.Infrastructure.Rules.RuleEngine.resetTurn
         // Shared external lookup count table — persists across tool rounds in one turn.
         let externalLookupCounts = Dictionary<string, int>()
         let! (text, snap2) = iterateWithErrorRecovery deps snap1 state1 externalLookupCounts

@@ -24,3 +24,7 @@ packages/
 # Verification/test artifacts
 TestResults/
 coverage/
+
+# CLIPS native library (built locally via Native/build-clips.sh)
+src/BotSharp/Native/clips/
+src/BotSharp/runtimes/

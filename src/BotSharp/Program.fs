@@ -407,6 +407,7 @@ This file stores important information that persists across sessions.
         CronService       = Some cronSvc
         LastTokenUsage    = ref None   // subagents are ephemeral; actors override per session
         CurrentIteration  = ref 0
+        RuleEngine        = None   // subagents don't need rule engine
     }
 
     let subagentMgr =
@@ -422,6 +423,13 @@ This file stores important information that persists across sessions.
         |> addToolPairs msgToolPair
         |> addToolPairs spawnToolPair
 
+    // ── CLIPS rule engine (graceful fallback if native lib not available) ────
+    let ruleEngine =
+        try Some (BotSharp.Infrastructure.Rules.RuleEngine.create config.WorkspacePath)
+        with ex ->
+            eprintfn "[RuleEngine] CLIPS not available: %s" ex.Message
+            None
+
     // ── Build agent dependencies ──────────────────────────────────────────────
     let deps : AgentDependencies = {
         Provider          = provider
@@ -435,6 +443,7 @@ This file stores important information that persists across sessions.
         CronService       = Some cronSvc
         LastTokenUsage    = ref None   // overridden per session actor in createSessionActor
         CurrentIteration  = ref 0
+        RuleEngine        = ruleEngine
     }
 
     // ── Wire up the system ────────────────────────────────────────────────────

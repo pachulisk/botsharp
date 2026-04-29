@@ -75,7 +75,8 @@ let private makeDeps (provider: LLMProvider) (workspacePath: string) : AgentDepe
     CronService       = None
     Hook              = AgentHook.none
     LastTokenUsage    = ref None
-    CurrentIteration  = ref 0 }
+    CurrentIteration  = ref 0
+    RuleEngine        = None }
 
 /// Helper: run test in a temp directory; clean up on exit.
 let private withTempDir (f: string -> unit) =

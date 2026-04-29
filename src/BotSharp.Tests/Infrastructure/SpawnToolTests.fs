@@ -33,6 +33,7 @@ let private stubDeps : AgentDependencies = {
     CronService       = None
     LastTokenUsage    = ref None
     CurrentIteration  = ref 0
+    RuleEngine        = None
 }
 
 /// No-op completion callback for tests.

@@ -37,7 +37,8 @@ let private mkDeps
       CronService       = None
       Hook              = AgentHook.none
       LastTokenUsage    = ref None
-      CurrentIteration  = ref 0 }
+      CurrentIteration  = ref 0
+      RuleEngine        = None }
 
 [<Fact>]
 let ``AutoCompactService Start/Stop with ttl=0 does not crash`` () =

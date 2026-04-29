@@ -39,6 +39,7 @@ let private stubDeps : AgentDependencies = {
     CronService       = None
     LastTokenUsage    = ref None
     CurrentIteration  = ref 0
+    RuleEngine        = None
 }
 
 let private noopComplete : OnSubagentComplete = fun _ -> async { return () }

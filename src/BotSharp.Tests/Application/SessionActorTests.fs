@@ -60,7 +60,8 @@ let private makeDeps (provider: LLMProvider) : AgentDependencies =
       Hook              = AgentHook.none
       CronService       = None
       LastTokenUsage    = ref None
-      CurrentIteration  = ref 0 }
+      CurrentIteration  = ref 0
+      RuleEngine        = None }
 
 let private makeInbound (text: string) (sid: string) : InboundMessage = {
     Channel            = ChannelId "cli"
@@ -288,7 +289,8 @@ let private makeDepsUnified () : AgentDependencies =
       Hook              = AgentHook.none
       CronService       = None
       LastTokenUsage    = ref None
-      CurrentIteration  = ref 0 }
+      CurrentIteration  = ref 0
+      RuleEngine        = None }
 
 [<Fact>]
 let ``unified_session routes all messages to 'unified:default' session`` () =

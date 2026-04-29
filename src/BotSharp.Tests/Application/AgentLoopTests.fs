@@ -87,7 +87,8 @@ let private makeDepsWithTools
       CronService       = None
       Hook              = AgentHook.none
       LastTokenUsage    = ref None
-      CurrentIteration  = ref 0 }
+      CurrentIteration  = ref 0
+      RuleEngine        = None }
 
 let private makeDeps (provider: LLMProvider) : AgentDependencies =
     makeDepsWithTools provider Map.empty
