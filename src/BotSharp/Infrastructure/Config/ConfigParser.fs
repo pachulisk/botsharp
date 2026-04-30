@@ -532,6 +532,24 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                         else AllowedSet (Set.ofList ids)
                 Some { Token = token; AllowFrom = allowFrom } : DiscordChannelConfig option
 
+    // ── Parse optional [slack] section ───────────────────────────────────────
+    let slackConfig =
+        match tryGetObject "slack" el with
+        | None -> None
+        | Some sl ->
+            match tryGetString "bot_token" sl, tryGetString "app_token" sl with
+            | Some botToken, Some appToken ->
+                let allowFrom =
+                    match tryGetArray "allow_from" sl with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                let replyInThread = match tryGetBool "reply_in_thread" sl with Some b -> b | None -> true
+                Some { BotToken = botToken; AppToken = appToken; AllowFrom = allowFrom; ReplyInThread = replyInThread } : SlackChannelConfig option
+            | _ -> None
+
     let interAgentConfig =
         match tryGetObject "inter_agent" el with
         | None -> None
@@ -617,6 +635,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             ApiTimeoutSeconds      = apiTimeoutSeconds
             ApiHost                = apiHost
             Discord                = discordConfig
+            Slack                  = slackConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

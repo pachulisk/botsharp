@@ -519,6 +519,21 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(), cts.Token)
         (server, cts)
 
+    // ── Slack server (start function, shared by both modes) ────────────────
+    let startSlackServer (slCfg: SlackChannelConfig) =
+        let slDeps = { deps with StreamHook = NoStreaming }
+        let slCoordinator = AgentCoordinator(slDeps)
+        let slConfig : BotSharp.Infrastructure.Channels.SlackChannel.SlackConfig = {
+            BotToken      = slCfg.BotToken
+            AppToken      = slCfg.AppToken
+            AllowFrom     = slCfg.AllowFrom
+            ReplyInThread = slCfg.ReplyInThread
+        }
+        let server = BotSharp.Infrastructure.Channels.SlackChannel.SlackServer(slCoordinator, slConfig, httpClient)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── Inter-agent server (start function, shared by both modes) ──────────
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
@@ -648,6 +663,12 @@ This file stores important information that persists across sessions.
             | Some dcCfg -> Some (startDiscordServer dcCfg)
             | None -> None
 
+        // Slack: start if configured
+        let slServerOpt =
+            match config.Slack with
+            | Some slCfg -> Some (startSlackServer slCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -699,6 +720,7 @@ This file stores important information that persists across sessions.
         apiServer.Stop()
         wsServerOpt |> Option.iter (fun s -> s.Stop())
         dcServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        slServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -747,6 +769,12 @@ This file stores important information that persists across sessions.
             | Some dcCfg -> Some (startDiscordServer dcCfg)
             | None -> None
 
+        // Slack: start if configured
+        let slServerOpt =
+            match config.Slack with
+            | Some slCfg -> Some (startSlackServer slCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -773,6 +801,7 @@ This file stores important information that persists across sessions.
         apiServerOpt |> Option.iter (fun s -> s.Stop())
         wsServerOpt  |> Option.iter (fun s -> s.Stop())
         dcServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        slServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt  |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()

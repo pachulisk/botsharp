@@ -791,6 +791,7 @@ type BotSharpConfig = {
     ApiTimeoutSeconds      : int                       // per-request timeout for API server (Python: api.timeout; default 120)
     ApiHost                : string                    // listen address for API server (Python: api.host; default "localhost")
     Discord                : DiscordChannelConfig option      // None = Discord disabled
+    Slack                  : SlackChannelConfig option        // None = Slack disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -798,6 +799,13 @@ type BotSharpConfig = {
 and DiscordChannelConfig = {
     Token     : string
     AllowFrom : AllowList
+}
+
+and SlackChannelConfig = {
+    BotToken      : string
+    AppToken      : string
+    AllowFrom     : AllowList
+    ReplyInThread : bool
 }
 
 and InterAgentChannelConfig = {
@@ -875,6 +883,7 @@ module BotSharpConfig =
         Telegram           = None
         Ws                 = None
         Discord            = None
+        Slack              = None
         InterAgent         = None
         FallbackModels     = []
     }

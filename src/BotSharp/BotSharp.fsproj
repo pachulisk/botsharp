@@ -85,6 +85,9 @@
     <!-- Discord channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/DiscordChannel.fs" />
 
+    <!-- Slack channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/SlackChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 
