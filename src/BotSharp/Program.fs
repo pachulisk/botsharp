@@ -418,10 +418,15 @@ This file stores important information that persists across sessions.
     let spawnToolPair =
         BotSharp.Infrastructure.Tools.SpawnTool.allTools subagentMgr
 
+    let longTaskToolPair =
+        BotSharp.Infrastructure.Tools.LongTaskTool.allTools
+            (fun extraToolPairs sysPrompt userMsg -> subagentMgr.RunStep(extraToolPairs, sysPrompt, userMsg))
+
     let allToolsMap : Map<ToolName, ToolSpec * (Map<string, System.Text.Json.JsonElement> -> Async<ToolResult>)> =
         baseToolMap
         |> addToolPairs msgToolPair
         |> addToolPairs spawnToolPair
+        |> addToolPairs longTaskToolPair
 
     // ── CLIPS rule engine (graceful fallback if native lib not available) ────
     let ruleEngine =
@@ -429,6 +434,21 @@ This file stores important information that persists across sessions.
         with ex ->
             eprintfn "[RuleEngine] CLIPS not available: %s" ex.Message
             None
+
+    // Configuration validation via rule engine
+    match ruleEngine with
+    | Some engine ->
+        if config.ContextWindowTokens > 0 && config.MaxTokens >= config.ContextWindowTokens then
+            BotSharp.Infrastructure.Rules.RuleEngine.assertConfigIssue engine "max_tokens" "error"
+                $"max_tokens ({config.MaxTokens}) exceeds context_window ({config.ContextWindowTokens})"
+        let configActions = BotSharp.Infrastructure.Rules.RuleEngine.evaluate engine
+        for action in configActions do
+            match action with
+            | BotSharp.Infrastructure.Rules.RuleEngine.StopLoop reason ->
+                eprintfn "[RuleEngine] Configuration error: %s" reason
+            | _ -> ()
+        BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
+    | None -> ()
 
     // ── Build agent dependencies ──────────────────────────────────────────────
     let deps : AgentDependencies = {

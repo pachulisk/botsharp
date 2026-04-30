@@ -821,6 +821,25 @@ let rec private iterate
             // Record token usage for the my tool's _last_usage key.
             deps.LastTokenUsage.Value <- Some response.Usage
 
+            // Assert LLM response fact into rule engine.
+            match deps.RuleEngine with
+            | None -> ()
+            | Some engine ->
+                let status =
+                    match response.Body with
+                    | Empty -> "empty"
+                    | _     -> "ok"
+                let finishReason =
+                    match response.FinishReason with
+                    | Some Stop         -> "stop"
+                    | Some Length       -> "length"
+                    | Some ContentFilter -> "content_filter"
+                    | Some ToolCalls    -> "tool_calls"
+                    | _                 -> ""
+                let totalTokens = response.Usage.PromptTokens + response.Usage.CompletionTokens
+                BotSharp.Infrastructure.Rules.RuleEngine.assertLlmResponse
+                    engine status "" finishReason totalTokens _iter
+
             // Populate the hook context with the LLM response.
             hookCtx.Response <- Some response
             match response.Body with
@@ -990,7 +1009,12 @@ let rec private iterate
                                 | ExecutionFailed msg        -> "failure", msg
                                 | ExecutionTimeout t         -> "failure", $"Timed out after {t.TotalSeconds}s"
                                 | WorkspaceViolation p       -> "failure", $"Access denied: {p}"
-                        BotSharp.Infrastructure.Rules.RuleEngine.assertToolResult engine toolName status errorStr iter)
+                        BotSharp.Infrastructure.Rules.RuleEngine.assertToolResult engine toolName status errorStr iter
+                        // Also assert tool-timeout fact for timeout-specific rules
+                        match result with
+                        | ToolFailure (ExecutionTimeout t) ->
+                            BotSharp.Infrastructure.Rules.RuleEngine.assertToolTimeout engine toolName iter t.TotalSeconds
+                        | _ -> ())
                     let actions = BotSharp.Infrastructure.Rules.RuleEngine.evaluate engine
                     actions |> List.tryPick (function
                         | BotSharp.Infrastructure.Rules.RuleEngine.StopLoop reason -> Some reason
