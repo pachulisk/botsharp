@@ -68,8 +68,9 @@
     <Compile Include="Application/AutoCompactService.fs" />
     <Compile Include="Application/SubagentManager.fs" />
 
-    <!-- SpawnTool after SubagentManager (Application layer dep — same pattern as TelegramChannel) -->
+    <!-- SpawnTool and LongTaskTool after SubagentManager (Application layer dep) -->
     <Compile Include="Infrastructure/Tools/SpawnTool.fs" />
+    <Compile Include="Infrastructure/Tools/LongTaskTool.fs" />
 
     <!-- Telegram channel adapter (after SessionActor — uses TelegramCoordinator) -->
     <Compile Include="Infrastructure/Channels/TelegramChannel.fs" />

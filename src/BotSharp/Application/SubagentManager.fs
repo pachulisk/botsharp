@@ -113,6 +113,44 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
     // ── Public API ────────────────────────────────────────────────────────
 
+    /// Run a single subagent step synchronously and return the result.
+    /// Used by LongTaskTool for its meta-ReAct loop (each step is short: 8 iterations).
+    /// Extra tool specs are injected alongside the standard subagent tools
+    /// (e.g., handoff/complete signal tools).
+    member _.RunStep
+        (extraToolPairs : (ToolSpec * (Map<string, System.Text.Json.JsonElement> -> Async<ToolResult>)) list,
+         systemPrompt   : string,
+         userMessage    : string)
+        : Async<Result<string, AgentError>> =
+        async {
+            let taskId = Guid.NewGuid().ToString("N").[..7]
+            // Build deps with extra tools injected
+            let extraMap =
+                extraToolPairs
+                |> List.map (fun (spec, exec) -> spec.Name, (spec, exec))
+                |> Map.ofList
+            let stepDeps =
+                { subDeps with
+                    Tools = Map.fold (fun acc k v -> Map.add k v acc) subDeps.Tools extraMap
+                    Config = { subDeps.Config with MaxIterations = 8 } }
+            let inbound : InboundMessage = {
+                Channel            = ChannelId "long_task"
+                Sender             = UserId    "long_task"
+                Chat               = ChatId    $"long-task-{taskId}"
+                Input              = ChatMessage (userMessage, [])
+                Metadata           = Map.empty
+                SessionKeyOverride = Some (SessionId $"long-task:{taskId}")
+            }
+            // Override system prompt by wrapping BuildSystemPrompt
+            let stepDepsWithPrompt =
+                { stepDeps with
+                    BuildSystemPrompt = fun _ _ -> async { return systemPrompt } }
+            let! result = runAgentLoop inbound stepDepsWithPrompt None
+            match result with
+            | Result.Ok (text, _) -> return Result.Ok text
+            | Result.Error e      -> return Result.Error e
+        }
+
     /// Spawn a subagent to execute `task` in the background.
     /// Returns immediately with a confirmation string.
     member _.Spawn
