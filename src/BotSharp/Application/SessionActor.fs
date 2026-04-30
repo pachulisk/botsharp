@@ -129,6 +129,40 @@ let createSessionActor
                         let emptySnap = SessionSnapshot.empty sid DateTimeOffset.UtcNow
                         channel.Reply (Result.Ok ("New session started.", emptySnap))
                         return! loop (Some emptySnap) None
+                | Command ClearHistory ->
+                    // /clear: wipe history WITHOUT consolidation (unlike /new).
+                    // Port of nanobot#3467.
+                    let sid = sessionId inbound
+                    let emptySnap = SessionSnapshot.empty sid DateTimeOffset.UtcNow
+                    let! _ = deps'.PersistSession emptySnap
+                    channel.Reply (Result.Ok ("History cleared.", emptySnap))
+                    return! loop (Some emptySnap) None
+                | Command (ShowHistory countOpt) ->
+                    // /history [n]: show recent messages from current session.
+                    // Port of nanobot#3466.
+                    let n = countOpt |> Option.defaultValue 10
+                    let historyText =
+                        match lastSnap with
+                        | None -> "(no active session)"
+                        | Some snap ->
+                            let msgs = SessionSnapshot.messages snap
+                            let recent = if msgs.Length <= n then msgs else msgs |> List.skip (msgs.Length - n)
+                            if recent.IsEmpty then "(empty session)"
+                            else
+                                recent
+                                |> List.mapi (fun i msg ->
+                                    let role, content =
+                                        match msg with
+                                        | UserMessage (c, _)          -> "user", c
+                                        | AssistantMessage (c, _)     -> "assistant", c
+                                        | SystemMessage c             -> "system", c
+                                        | ToolCallMessage _           -> "tool_calls", "(tool calls)"
+                                        | ToolResultMessage (_, ToolName n, c) -> $"tool:{n}", (if c.Length > 100 then c.[..99] + "..." else c)
+                                    let preview = if content.Length > 200 then content.[..199] + "..." else content
+                                    $"[{i+1}] {role}: {preview}")
+                                |> String.concat "\n"
+                    channel.Reply (Result.Ok (historyText, lastSnap |> Option.defaultValue (SessionSnapshot.empty (SessionId "none") DateTimeOffset.UtcNow)))
+                    return! loop lastSnap pendingSummary
                 | _ -> ()
                 // Consume pendingSummary this turn (inject into runtime context, then clear).
                 let! result = runAgentLoop inbound deps' pendingSummary

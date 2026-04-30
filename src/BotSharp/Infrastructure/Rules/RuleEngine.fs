@@ -108,6 +108,18 @@ let private builtinRules = """
 ;; Tool failure rules
 ;; ═══════════════════════════════════════════════════════════════
 
+;; Workspace violation: agent tried to access files outside workspace.
+;; Stop immediately — continuing lets the agent try to bypass the restriction.
+;; (Port of nanobot#3493)
+(defrule workspace-violation-stop
+  (declare (salience 20))
+  (tool-result (tool ?t) (status "failure") (error ?e&:(str-index "Access denied" ?e)))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason (str-cat "Workspace violation by " ?t ": " ?e " - stopping to prevent bypass attempts"))
+                  (tool ?t))))
+
 ;; Same tool fails 3+ times with identical non-empty error.
 (defrule repeated-tool-failure
   (tool-result (tool ?t) (status "failure") (error ?e&~"") (iteration ?i1))

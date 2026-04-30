@@ -140,7 +140,9 @@ let startCli (coordinator: AgentCoordinator) (port: ChannelPort) (deps: AgentDep
             | Command ShowHelp ->
                 printfn """
 Commands:
-  /new              — Start a new conversation (clear session history)
+  /new              — Start a new conversation (archives history)
+  /clear            — Clear history without archiving
+  /history [n]      — Show last n messages (default 10)
   /stop             — Exit
   /restart          — Restart the process
   /status           — Show current configuration
@@ -180,6 +182,16 @@ Commands:
                 match usageOpt with
                 | Some u -> printfn "  Last call:      %s" (TokenUsage.formatUsage u)
                 | None   -> ()
+                return! loop ()
+
+            // /clear and /history are routed to the coordinator (handled in SessionActor)
+            | Command ClearHistory | Command (ShowHistory _) ->
+                let! result = coordinator.Route msg
+                match result with
+                | Result.Ok (PlainResponse text) | Result.Ok (StreamedResponse text) ->
+                    if text <> "" then printfn "\n%s" text
+                | Result.Error e ->
+                    printfn "\nError: %A" e
                 return! loop ()
 
             | Command Dream ->

@@ -249,7 +249,11 @@ This file stores important information that persists across sessions.
 """
 
     // ── Resolve provider ──────────────────────────────────────────────────────
+    // LLM requests can take minutes (reasoning models, large context).
+    // Set a generous timeout to prevent silent hangs while avoiding infinite waits.
+    // Port of nanobot#3428 + #3478: bound request timeouts.
     use httpClient = new HttpClient()
+    httpClient.Timeout <- TimeSpan.FromSeconds(300.0)   // 5 min — covers long reasoning + streaming
 
     // ── Dedicated web-tool HttpClient (proxy + timeout) ───────────────────────
     let webHandler =

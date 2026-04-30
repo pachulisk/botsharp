@@ -61,10 +61,12 @@ type MediaContent =
 
 type SlashCommand =
     | NewSession
+    | ClearHistory
     | StopProcessing
     | ShowHelp
     | Restart
     | ShowStatus
+    | ShowHistory   of count: int option
     | Dream
     | DreamLog     of sha: string option
     | DreamRestore of sha: string option

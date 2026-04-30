@@ -541,7 +541,9 @@ let private processMessage
 
         | Command ShowHelp ->
             let helpText =
-                "Commands:\n/new              — Start a new conversation\n" +
+                "Commands:\n/new              — Start a new conversation (archives history)\n" +
+                "/clear            — Clear history without archiving\n" +
+                "/history [n]      — Show last n messages (default 10)\n" +
                 "/stop             — Exit\n/status           — Show configuration\n" +
                 "/dream            — Consolidate memory and save a dream entry\n" +
                 "/dream-log        — List all dream entries\n" +
@@ -645,6 +647,8 @@ let private processMessage
                             |> Async.AwaitTask |> Async.Ignore
 
         | Command NewSession
+        | Command ClearHistory
+        | Command (ShowHistory _)
         | ChatMessage _ ->
             let! media = extractMedia bot httpClient tokenStr msg
 

@@ -33,11 +33,16 @@ open BotSharp.Domain.Types
 
 // ── No-argument commands — each guards its own end-of-input ──────────────
 let private pNewSession     = pstring "/new"     .>> spaces .>> eof >>% Command NewSession
+let private pClearHistory   = pstring "/clear"   .>> spaces .>> eof >>% Command ClearHistory
 let private pStopProcessing = pstring "/stop"    .>> spaces .>> eof >>% Command StopProcessing
 let private pShowHelp       = pstring "/help"    .>> spaces .>> eof >>% Command ShowHelp
 let private pRestart        = pstring "/restart" .>> spaces .>> eof >>% Command Restart
 let private pShowStatus     = pstring "/status"  .>> spaces .>> eof >>% Command ShowStatus
 let private pDream          = pstring "/dream"   .>> spaces .>> eof >>% Command Dream
+
+let private pShowHistory : Parser<UserInput, unit> =
+    pstring "/history" >>. spaces >>. opt (many1Chars digit) .>> eof
+    |>> (fun nOpt -> Command (ShowHistory (nOpt |> Option.map int)))
 
 // ── Optional SHA argument: lowercase hex only ([0-9a-f]+) ────────────────
 // Restricts to lowercase hex so that /dream-log ZZZ is rejected at parse
@@ -61,6 +66,8 @@ let private pSlashCommand : Parser<UserInput, unit> =
         attempt pDreamLog      // must precede pDream (shares "/dream" prefix)
         attempt pDreamRestore  // must precede pDream (shares "/dream" prefix)
         attempt pNewSession
+        attempt pClearHistory
+        attempt pShowHistory
         attempt pStopProcessing
         attempt pShowHelp
         attempt pRestart
