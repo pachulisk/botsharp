@@ -21,6 +21,7 @@ type RuleAction =
     | StopLoop of reason: string
     | InjectPrompt of text: string
     | SkipTool of toolName: string
+    | StripReasoning of reason: string
 
 type RuleEngine = {
     Env : ClipsEnv
@@ -76,6 +77,12 @@ let private builtinRules = """
 
 (deftemplate inter-agent-response
   (slot content (type STRING)))
+
+(deftemplate provider-fallback
+  (slot from-provider (type STRING))
+  (slot to-provider (type STRING))
+  (slot from-thinking-style (type STRING))
+  (slot to-thinking-style (type STRING)))
 
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
@@ -224,6 +231,46 @@ let private builtinRules = """
   (assert (action (type "stop-loop")
                   (reason "consensus-reached")
                   (tool "interagent"))))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Provider fallback reasoning compatibility
+;; ═══════════════════════════════════════════════════════════════
+
+;; When falling back from provider A to provider B, strip reasoning_content
+;; if the thinking styles are different (incompatible formats).
+;; Same style (e.g. both "ReasoningSplit") → keep reasoning.
+;; Different styles or one is "None" → strip reasoning.
+(defrule fallback-strip-reasoning
+  (provider-fallback (from-provider ?p1) (to-provider ?p2&~?p1)
+                     (from-thinking-style ?s1) (to-thinking-style ?s2&~?s1))
+  (not (action (type "strip-reasoning")))
+  =>
+  (assert (action (type "strip-reasoning")
+                  (reason (str-cat "Reasoning incompatible: " ?p1 " (" ?s1 ") -> " ?p2 " (" ?s2 ")"))
+                  (tool ""))))
+
+;; Same thinking style between different providers: still strip because
+;; providers may reject reasoning_content from other providers even if
+;; the format is the same (e.g. DeepSeek rejects MiMo's reasoning_content).
+(defrule fallback-strip-reasoning-cross-provider
+  (provider-fallback (from-provider ?p1) (to-provider ?p2&~?p1)
+                     (from-thinking-style "ReasoningSplit") (to-thinking-style "ReasoningSplit"))
+  (not (action (type "strip-reasoning")))
+  =>
+  (assert (action (type "strip-reasoning")
+                  (reason (str-cat "Cross-provider ReasoningSplit: " ?p1 " -> " ?p2 " (different provider, strip to be safe)"))
+                  (tool ""))))
+
+;; Same provider fallback (e.g. two DeepSeek instances with different base URLs):
+;; keep reasoning_content since the format is guaranteed compatible.
+;; This rule has higher salience so it fires first and blocks strip-reasoning.
+(defrule fallback-keep-reasoning-same-provider
+  (declare (salience 10))
+  (provider-fallback (from-provider ?p) (to-provider ?p))
+  =>
+  (assert (action (type "keep-reasoning")
+                  (reason (str-cat "Same provider " ?p " -> " ?p ": keep reasoning_content"))
+                  (tool ""))))
 """
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -343,6 +390,21 @@ let assertLongTaskStep
     | Ok ()     -> ()
     | Error msg -> eprintfn "[RuleEngine] Assert long-task-step failed: %s" msg
 
+/// Assert a provider fallback fact for reasoning compatibility check.
+let assertProviderFallback
+    (engine            : RuleEngine)
+    (fromProvider      : string)
+    (toProvider        : string)
+    (fromThinkingStyle : string)
+    (toThinkingStyle   : string)
+    : unit =
+    let factStr =
+        sprintf "(provider-fallback (from-provider \"%s\") (to-provider \"%s\") (from-thinking-style \"%s\") (to-thinking-style \"%s\"))"
+            (escapeClips fromProvider) (escapeClips toProvider) (escapeClips fromThinkingStyle) (escapeClips toThinkingStyle)
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert provider-fallback failed: %s" msg
+
 // ── Evaluation ───────────────────────────────────────────────────────────
 
 /// Run the inference engine and extract any triggered actions.
@@ -353,10 +415,18 @@ let evaluate (engine: RuleEngine) : RuleAction list =
     let actions = queryActionFacts engine.Env
     actions |> List.choose (fun (typ, reason, tool) ->
         match typ with
-        | "stop-loop"      -> Some (StopLoop reason)
-        | "inject-prompt"  -> Some (InjectPrompt reason)
-        | "skip-tool"      -> Some (SkipTool tool)
+        | "stop-loop"        -> Some (StopLoop reason)
+        | "inject-prompt"    -> Some (InjectPrompt reason)
+        | "skip-tool"        -> Some (SkipTool tool)
+        | "strip-reasoning"  -> Some (StripReasoning reason)
+        | "keep-reasoning"   -> None   // explicitly no action needed
         | _                -> None)
+
+/// Check if reasoning_content should be stripped for a provider fallback.
+/// Runs the engine and checks for StripReasoning actions.
+let shouldStripReasoning (engine: RuleEngine) : bool =
+    let actions = evaluate engine
+    actions |> List.exists (function StripReasoning _ -> true | _ -> false)
 
 // ── Turn management ──────────────────────────────────────────────────────
 

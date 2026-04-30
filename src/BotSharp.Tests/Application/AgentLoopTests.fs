@@ -2223,7 +2223,7 @@ let ``chatWithRetry: succeeds on first try when no error`` () =
         ChatStream = fun _ _ _ _ -> async { return Result.Ok () }
     }
     let settings = { Temperature = 0.0; MaxTokens = 10; ReasoningEffort = None }
-    let result = chatWithRetry provider [] settings [] [] |> Async.RunSynchronously
+    let result = chatWithRetry provider [] None settings [] [] |> Async.RunSynchronously
     match result with
     | Result.Ok r -> Assert.Equal(TextOnly "ok", r.Body); Assert.Equal(1, !callCount)
     | Result.Error e -> Assert.Fail($"Expected Ok, got {e}")
@@ -2247,7 +2247,7 @@ let ``chatWithRetry: retries on ServerError 503 and eventually succeeds`` () =
         ChatStream = fun _ _ _ _ -> async { return Result.Ok () }
     }
     let settings = { Temperature = 0.0; MaxTokens = 10; ReasoningEffort = None }
-    let result = chatWithRetry provider [] settings [] [] |> Async.RunSynchronously
+    let result = chatWithRetry provider [] None settings [] [] |> Async.RunSynchronously
     match result with
     | Result.Ok r -> Assert.Equal(TextOnly "recovered", r.Body); Assert.Equal(3, !callCount)
     | Result.Error e -> Assert.Fail($"Expected Ok after retries, got {e}")
@@ -2267,7 +2267,7 @@ let ``chatWithRetry: does not retry on non-retryable error`` () =
         ChatStream = fun _ _ _ _ -> async { return Result.Ok () }
     }
     let settings = { Temperature = 0.0; MaxTokens = 10; ReasoningEffort = None }
-    let result = chatWithRetry provider [] settings [] [] |> Async.RunSynchronously
+    let result = chatWithRetry provider [] None settings [] [] |> Async.RunSynchronously
     match result with
     | Result.Error { Kind = ConnectionFailed _ } ->
         Assert.Equal(1, !callCount)  // exactly 1 call — no retries
@@ -2289,7 +2289,7 @@ let ``chatWithRetry: exhausts all retries and returns last error`` () =
         ChatStream = fun _ _ _ _ -> async { return Result.Ok () }
     }
     let settings = { Temperature = 0.0; MaxTokens = 10; ReasoningEffort = None }
-    let result = chatWithRetry provider [] settings [] [] |> Async.RunSynchronously
+    let result = chatWithRetry provider [] None settings [] [] |> Async.RunSynchronously
     match result with
     | Result.Error { Kind = ServerError 503 } ->
         Assert.Equal(3, !callCount)  // initial + 2 retries
@@ -2561,6 +2561,7 @@ let private callWithRetry provider =
     chatWithRetry
         provider
         []
+        None
         GenerationSettings.defaults
         [ SystemMessage "sys" ]
         []

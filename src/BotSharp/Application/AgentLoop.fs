@@ -653,34 +653,59 @@ let private chatWithRetrySingle
         }
     go (List.length delays) delays
 
-/// Strip reasoning_content from messages when falling back to a different provider.
-/// Different providers have incompatible reasoning formats (e.g. MiMo vs DeepSeek).
-/// Sending MiMo's reasoning_content to DeepSeek causes:
-///   "The reasoning_content in the thinking mode must be passed back to the API."
+/// Strip reasoning_content from messages.
 let private stripReasoningContent (messages: Message list) : Message list =
     messages |> List.map (function
         | AssistantMessage (content, Some _) -> AssistantMessage (content, None)
         | ToolCallMessage (calls, Some _)    -> ToolCallMessage (calls, None)
         | other                              -> other)
 
+/// Look up the ThinkingStyle for a provider by ID from the registry.
+let private thinkingStyleForProvider (providerId: string) : string =
+    BotSharp.Infrastructure.Providers.ProviderRegistry.providers
+    |> NonEmptyList.tryFind (fun s -> s.Id = providerId)
+    |> Option.bind (fun s -> s.ThinkingStyle)
+    |> Option.map (function
+        | ThinkingType         -> "ThinkingType"
+        | EnableThinking       -> "EnableThinking"
+        | ReasoningSplit       -> "ReasoningSplit"
+        | ReasoningEffortParam -> "ReasoningEffortParam")
+    |> Option.defaultValue "None"
+
+/// Use CLIPS rules to decide whether reasoning_content should be stripped
+/// when falling back from one provider to another.
+let private shouldStripForFallback
+    (ruleEngine : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
+    (fromId     : string)
+    (toId       : string)
+    : bool =
+    match ruleEngine with
+    | None ->
+        // No rule engine: strip when providers differ (safe default)
+        fromId <> toId
+    | Some engine ->
+        let fromStyle = thinkingStyleForProvider fromId
+        let toStyle   = thinkingStyleForProvider toId
+        BotSharp.Infrastructure.Rules.RuleEngine.assertProviderFallback engine fromId toId fromStyle toStyle
+        BotSharp.Infrastructure.Rules.RuleEngine.shouldStripReasoning engine
+
 /// Try the primary provider, then fallback providers in order.
 /// Each provider gets its full retry budget before moving to the next.
-/// When falling back, reasoning_content is stripped from messages to avoid
-/// cross-provider incompatibility.
+/// CLIPS rules decide whether reasoning_content should be stripped for each
+/// fallback — not hardcoded. Different providers may have incompatible formats.
 let chatWithRetry
-    (primary   : LLMProvider)
-    (fallbacks : LLMProvider list)
-    (settings  : GenerationSettings)
-    (messages  : Message list)
-    (tools     : ToolSpec list)
+    (primary    : LLMProvider)
+    (fallbacks  : LLMProvider list)
+    (ruleEngine : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
+    (settings   : GenerationSettings)
+    (messages   : Message list)
+    (tools      : ToolSpec list)
     : Async<Result<LLMResponse, LlmError>> =
     async {
         let! result = chatWithRetrySingle primary settings messages tools
         match result with
         | Ok _ -> return result
         | Error primaryErr ->
-            // Strip reasoning_content: different providers have incompatible formats
-            let cleanMessages = stripReasoningContent messages
             let rec tryFallbacks remaining =
                 async {
                     match remaining with
@@ -689,7 +714,13 @@ let chatWithRetry
                         let primaryId = (primary : LLMProvider).Id
                         let fbId = (fb : LLMProvider).Id
                         eprintfn "[Fallback] Primary provider '%s' failed, trying '%s'" primaryId fbId
-                        let! fbResult = chatWithRetrySingle fb settings cleanMessages tools
+                        let msgs =
+                            if shouldStripForFallback ruleEngine primaryId fbId then
+                                eprintfn "[Fallback] Stripping reasoning_content (CLIPS: providers incompatible)"
+                                stripReasoningContent messages
+                            else
+                                messages
+                        let! fbResult = chatWithRetrySingle fb settings msgs tools
                         match fbResult with
                         | Ok _ -> return fbResult
                         | Error _ -> return! tryFallbacks rest
@@ -777,7 +808,7 @@ let rec private iterate
                 match deps.StreamHook with
                 | NoStreaming ->
                     // Non-streaming: apply retry policy (mirrors Python chat_with_retry).
-                    liftLlm (chatWithRetry deps.Provider deps.FallbackProviders fullReq.Settings fullReq.Messages fullReq.Tools)
+                    liftLlm (chatWithRetry deps.Provider deps.FallbackProviders deps.RuleEngine fullReq.Settings fullReq.Messages fullReq.Tools)
 
                 | StreamingHook (onDelta, onStreamEnd) ->
                     asyncResult {
@@ -908,7 +939,7 @@ let rec private iterate
                 // Mirrors Python runner._request_finalization_retry.
                 let retryMessages = trimmedMessages @ [ UserMessage (_FINALIZATION_PROMPT, []) ]
                 let retrySettings = fullReq.Settings  // same settings
-                let! retryResp = liftLlm (chatWithRetry deps.Provider deps.FallbackProviders retrySettings retryMessages [])
+                let! retryResp = liftLlm (chatWithRetry deps.Provider deps.FallbackProviders deps.RuleEngine retrySettings retryMessages [])
                 match retryResp.Body with
                 | TextOnly text when text.Trim() <> "" ->
                     // Recovery succeeded — treat as a normal text response.
@@ -936,7 +967,7 @@ let rec private iterate
                 if text.Trim() = "" && emptyContentRetries < _MAX_EMPTY_RETRIES then
                     do! deps.Hook.AfterIteration hookCtx |> AsyncResult.ofAsync
                     let retryMessages = trimmedMessages @ [ UserMessage (_FINALIZATION_PROMPT, []) ]
-                    let! retryResp = liftLlm (chatWithRetry deps.Provider deps.FallbackProviders fullReq.Settings retryMessages [])
+                    let! retryResp = liftLlm (chatWithRetry deps.Provider deps.FallbackProviders deps.RuleEngine fullReq.Settings retryMessages [])
                     let retryText = stripThink (match retryResp.Body with TextOnly t -> t | _ -> "")
                     if retryText.Trim() <> "" then
                         // Finalization retry recovered a non-blank response — proceed normally.
