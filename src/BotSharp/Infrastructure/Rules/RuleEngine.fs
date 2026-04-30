@@ -108,6 +108,17 @@ let private builtinRules = """
 (deftemplate session-clear-request
   (slot unconsolidated-count (type INTEGER)))
 
+;; Session message truncation event — tracks when max_messages cuts history.
+(deftemplate session-truncated
+  (slot total-messages (type INTEGER))
+  (slot kept-messages (type INTEGER))
+  (slot dropped-messages (type INTEGER)))
+
+;; Subagent iteration budget — tracks when a subagent exhausts its iterations.
+(deftemplate subagent-budget-exhausted
+  (slot task-id (type STRING))
+  (slot max-iterations (type INTEGER)))
+
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
 ;; ═══════════════════════════════════════════════════════════════
@@ -122,6 +133,24 @@ let private builtinRules = """
   (assert (action (type "inject-prompt")
                   (reason (str-cat "Session has " ?n " unconsolidated messages. Archiving to MEMORY.md first."))
                   (tool ""))))
+
+;; Session history heavily truncated by max_messages — trigger consolidation.
+;; If more than half the messages were dropped, the session is growing
+;; faster than it's being consolidated.
+(defrule session-truncation-pressure
+  (session-truncated (total-messages ?total) (dropped-messages ?dropped&:(> ?dropped (div ?total 2))))
+  (not (action (type "inject-prompt")))
+  =>
+  (assert (action (type "inject-prompt")
+                  (reason (str-cat "Session truncated: " ?dropped "/" ?total " messages dropped by max_messages cap. Consider consolidating."))
+                  (tool ""))))
+
+;; Subagent exhausted its iteration budget — log for observability.
+;; If this happens repeatedly, the subagent_max_iterations may be too low.
+(defrule subagent-budget-warning
+  (subagent-budget-exhausted (task-id ?tid) (max-iterations ?n))
+  =>
+  (printout t "[RuleEngine] Subagent " ?tid " exhausted " ?n " iterations" crlf))
 
 ;; Workspace violation: agent tried to access files outside workspace.
 ;; Stop immediately — continuing lets the agent try to bypass the restriction.
@@ -611,6 +640,30 @@ let evaluate (engine: RuleEngine) : RuleAction list =
         | "allow-fallback"   -> Some (AllowFallback reason)
         | "block-fallback"   -> Some (BlockFallback reason)
         | _                -> None)
+
+/// Assert a session-truncated fact when max_messages cuts history.
+let assertSessionTruncated (engine: RuleEngine) (totalMessages: int) (keptMessages: int) : unit =
+    let dropped = totalMessages - keptMessages
+    let factStr =
+        sprintf "(session-truncated (total-messages %d) (kept-messages %d) (dropped-messages %d))"
+            totalMessages keptMessages dropped
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert session-truncated failed: %s" msg
+
+/// Assert a subagent-budget-exhausted fact.
+let assertSubagentBudgetExhausted (engine: RuleEngine) (taskId: string) (maxIterations: int) : unit =
+    let factStr =
+        sprintf "(subagent-budget-exhausted (task-id \"%s\") (max-iterations %d))"
+            (escapeClips taskId) maxIterations
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert subagent-budget-exhausted failed: %s" msg
+
+/// Check if session truncation triggered a consolidation recommendation.
+let shouldConsolidateAfterTruncation (engine: RuleEngine) : bool =
+    let actions = evaluate engine
+    actions |> List.exists (function InjectPrompt r -> r.Contains("truncated") | _ -> false)
 
 /// Check if reasoning_content should be stripped for a provider fallback.
 /// Runs the engine and checks for StripReasoning actions.

@@ -108,8 +108,15 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             let! result = runAgentLoop inbound subDeps None
             let finalResult =
                 match result with
-                | Result.Ok (text, _) -> Result.Ok text
-                | Result.Error e      -> Result.Error e
+                | Result.Ok (text, _) ->
+                    // Track if subagent hit its iteration budget
+                    if text.Contains("stopped after") then
+                        baseDeps.RuleEngine |> Option.iter (fun engine ->
+                            BotSharp.Infrastructure.Rules.RuleEngine.assertSubagentBudgetExhausted
+                                engine taskId subDeps.Config.MaxIterations
+                            BotSharp.Infrastructure.Rules.RuleEngine.evaluate engine |> ignore)
+                    Result.Ok text
+                | Result.Error e -> Result.Error e
             do! announce taskId label task finalResult originChannel originChat
         }
 
