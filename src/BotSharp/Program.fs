@@ -492,6 +492,14 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(port))
         server
 
+    // ── Inter-agent server (start function, shared by both modes) ──────────
+    let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
+        let iaDeps = { deps with StreamHook = NoStreaming }
+        let iaCoordinator = AgentCoordinator(iaDeps)
+        let server = BotSharp.Infrastructure.Channels.InterAgentChannel.InterAgentServer(iaCoordinator, iaCfg, httpClient)
+        Async.Start(server.Start())
+        server
+
     // ── HeartbeatService ──────────────────────────────────────────────────────
     let heartbeatSvc =
         HeartbeatService(
@@ -601,6 +609,12 @@ This file stores important information that persists across sessions.
             | Some (port, wsToken) -> Some (startWsServer port wsToken)
             | None -> None
 
+        // Inter-agent: start if configured
+        let iaServerOpt =
+            match config.InterAgent with
+            | Some iaCfg when iaCfg.Enabled -> Some (startInterAgentServer iaCfg)
+            | _ -> None
+
         // Telegram: start if configured
         let tgCts = new System.Threading.CancellationTokenSource()
         match config.Telegram with
@@ -645,6 +659,7 @@ This file stores important information that persists across sessions.
         tgCts.Cancel()
         apiServer.Stop()
         wsServerOpt |> Option.iter (fun s -> s.Stop())
+        iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         disposeMcp ()
         0
@@ -685,6 +700,12 @@ This file stores important information that persists across sessions.
             | Some (port, wsToken) -> Some (startWsServer port wsToken)
             | None -> None
 
+        // Inter-agent: start if configured
+        let iaServerOpt =
+            match config.InterAgent with
+            | Some iaCfg when iaCfg.Enabled -> Some (startInterAgentServer iaCfg)
+            | _ -> None
+
         printfn "BotSharp — model: %s" config.DefaultModel
         printfn "Workspace:  %s" config.WorkspacePath
         printfn "Type /help for commands, Ctrl-D (EOF) to exit."
@@ -704,6 +725,7 @@ This file stores important information that persists across sessions.
 
         apiServerOpt |> Option.iter (fun s -> s.Stop())
         wsServerOpt  |> Option.iter (fun s -> s.Stop())
+        iaServerOpt  |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         disposeMcp ()
         0

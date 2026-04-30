@@ -81,6 +81,9 @@
     <!-- WebSocket channel (after SessionActor — uses per-connection streaming hook) -->
     <Compile Include="Infrastructure/Channels/WsChannel.fs" />
 
+    <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
+
     <!-- Message bus (after Application layer — depends on AgentCoordinator) -->
     <Compile Include="Infrastructure/MessageBus.fs" />
 

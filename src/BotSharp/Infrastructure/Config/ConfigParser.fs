@@ -511,6 +511,24 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                             None
                 Some { Port = port; Token = token; Enabled = true }
 
+    // ── Parse optional [inter_agent] section ────────────────────────────────
+    let interAgentConfig =
+        match tryGetObject "inter_agent" el with
+        | None -> None
+        | Some ia ->
+            let enabled = match tryGetBool "enabled" ia with Some b -> b | None -> false
+            if not enabled then None
+            else
+                let cfg : InterAgentChannelConfig = {
+                    Enabled             = true
+                    Port                = match tryGetInt "port" ia with Some p -> p | None -> 18800
+                    InstanceName        = match tryGetString "instance_name" ia with Some s -> s | None -> ""
+                    AuditWebhookUrl     = tryGetString "audit_webhook_url" ia
+                    MaxRoundsPerSession = match tryGetInt "max_rounds_per_session" ia with Some n -> n | None -> 30
+                    TaskTtlSeconds      = match tryGetInt "task_ttl_seconds" ia with Some n -> n | None -> 3600
+                }
+                Some cfg
+
     if errs.Count > 0 then
         Error (errs |> Seq.toList)
     else
@@ -575,4 +593,5 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             ApiPort                = apiPort
             ApiTimeoutSeconds      = apiTimeoutSeconds
             ApiHost                = apiHost
+            InterAgent             = interAgentConfig
         }
