@@ -790,8 +790,14 @@ type BotSharpConfig = {
     ApiPort                : int option                // start OpenAI-compatible API server on this port from config file (Python: api.port; None = CLI flag only)
     ApiTimeoutSeconds      : int                       // per-request timeout for API server (Python: api.timeout; default 120)
     ApiHost                : string                    // listen address for API server (Python: api.host; default "localhost")
+    Discord                : DiscordChannelConfig option      // None = Discord disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
+}
+
+and DiscordChannelConfig = {
+    Token     : string
+    AllowFrom : AllowList
 }
 
 and InterAgentChannelConfig = {
@@ -868,6 +874,7 @@ module BotSharpConfig =
         ReasoningEffort    = None
         Telegram           = None
         Ws                 = None
+        Discord            = None
         InterAgent         = None
         FallbackModels     = []
     }

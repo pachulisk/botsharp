@@ -515,6 +515,23 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 Some { Port = port; Token = token; Enabled = true }
 
     // ── Parse optional [inter_agent] section ────────────────────────────────
+    // ── Parse optional [discord] section ─────────────────────────────────────
+    let discordConfig =
+        match tryGetObject "discord" el with
+        | None -> None
+        | Some dc ->
+            match tryGetString "token" dc with
+            | None -> None
+            | Some token ->
+                let allowFrom =
+                    match tryGetArray "allow_from" dc with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                Some { Token = token; AllowFrom = allowFrom } : DiscordChannelConfig option
+
     let interAgentConfig =
         match tryGetObject "inter_agent" el with
         | None -> None
@@ -599,6 +616,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             ApiPort                = apiPort
             ApiTimeoutSeconds      = apiTimeoutSeconds
             ApiHost                = apiHost
+            Discord                = discordConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

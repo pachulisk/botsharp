@@ -506,6 +506,19 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(port))
         server
 
+    // ── Discord server (start function, shared by both modes) ─────────────
+    let startDiscordServer (dcCfg: DiscordChannelConfig) =
+        let dcDeps = { deps with StreamHook = NoStreaming }
+        let dcCoordinator = AgentCoordinator(dcDeps)
+        let dcConfig : BotSharp.Infrastructure.Channels.DiscordChannel.DiscordConfig = {
+            Token     = dcCfg.Token
+            AllowFrom = dcCfg.AllowFrom
+        }
+        let server = BotSharp.Infrastructure.Channels.DiscordChannel.DiscordServer(dcCoordinator, dcConfig)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── Inter-agent server (start function, shared by both modes) ──────────
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
@@ -629,6 +642,12 @@ This file stores important information that persists across sessions.
             | Some (port, wsToken) -> Some (startWsServer port wsToken)
             | None -> None
 
+        // Discord: start if configured
+        let dcServerOpt =
+            match config.Discord with
+            | Some dcCfg -> Some (startDiscordServer dcCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -679,6 +698,7 @@ This file stores important information that persists across sessions.
         tgCts.Cancel()
         apiServer.Stop()
         wsServerOpt |> Option.iter (fun s -> s.Stop())
+        dcServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -721,6 +741,12 @@ This file stores important information that persists across sessions.
             | Some (port, wsToken) -> Some (startWsServer port wsToken)
             | None -> None
 
+        // Discord: start if configured
+        let dcServerOpt =
+            match config.Discord with
+            | Some dcCfg -> Some (startDiscordServer dcCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -746,6 +772,7 @@ This file stores important information that persists across sessions.
 
         apiServerOpt |> Option.iter (fun s -> s.Stop())
         wsServerOpt  |> Option.iter (fun s -> s.Stop())
+        dcServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt  |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
