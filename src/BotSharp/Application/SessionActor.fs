@@ -130,12 +130,35 @@ let createSessionActor
                         channel.Reply (Result.Ok ("New session started.", emptySnap))
                         return! loop (Some emptySnap) None
                 | Command ClearHistory ->
-                    // /clear: wipe history WITHOUT consolidation (unlike /new).
-                    // Port of nanobot#3467.
+                    // /clear: wipe history, but CLIPS checks if we should consolidate first.
+                    // Port of nanobot#3467 + CLIPS safety check.
                     let sid = sessionId inbound
+                    let unconsolidated =
+                        match lastSnap with
+                        | Some snap -> SessionSnapshot.messageCount snap - SessionSnapshot.lastConsolidated snap
+                        | None -> 0
+                    // Ask CLIPS if we should force-consolidate before clearing
+                    let shouldArchiveFirst =
+                        match deps'.RuleEngine with
+                        | Some engine ->
+                            BotSharp.Infrastructure.Rules.RuleEngine.assertSessionClearRequest engine unconsolidated
+                            let result = BotSharp.Infrastructure.Rules.RuleEngine.shouldConsolidateBeforeClear engine
+                            BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
+                            result
+                        | None -> unconsolidated > 20   // fallback: same threshold without CLIPS
+                    if shouldArchiveFirst then
+                        match lastSnap with
+                        | Some snap ->
+                            eprintfn "[/clear] %d unconsolidated messages — archiving to MEMORY.md first" unconsolidated
+                            let! _ = forceConsolidate snap deps'
+                            ()
+                        | None -> ()
                     let emptySnap = SessionSnapshot.empty sid DateTimeOffset.UtcNow
                     let! _ = deps'.PersistSession emptySnap
-                    channel.Reply (Result.Ok ("History cleared.", emptySnap))
+                    let msg =
+                        if shouldArchiveFirst then $"Archived {unconsolidated} messages to MEMORY.md, then cleared."
+                        else "History cleared."
+                    channel.Reply (Result.Ok (msg, emptySnap))
                     return! loop (Some emptySnap) None
                 | Command (ShowHistory countOpt) ->
                     // /history [n]: show recent messages from current session.

@@ -104,9 +104,24 @@ let private builtinRules = """
   (slot signature (type STRING))
   (slot count (type INTEGER)))
 
+;; Session clear request — used by /clear to check safety.
+(deftemplate session-clear-request
+  (slot unconsolidated-count (type INTEGER)))
+
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
 ;; ═══════════════════════════════════════════════════════════════
+
+;; /clear with large unconsolidated history — warn about data loss.
+;; If > 20 unconsolidated messages, force consolidation first.
+(defrule clear-with-unarchived-history
+  (declare (salience 20))
+  (session-clear-request (unconsolidated-count ?n&:(> ?n 20)))
+  (not (action (type "block-fallback")))
+  =>
+  (assert (action (type "inject-prompt")
+                  (reason (str-cat "Session has " ?n " unconsolidated messages. Archiving to MEMORY.md first."))
+                  (tool ""))))
 
 ;; Workspace violation: agent tried to access files outside workspace.
 ;; Stop immediately — continuing lets the agent try to bypass the restriction.
@@ -607,6 +622,18 @@ let shouldStripReasoning (engine: RuleEngine) : bool =
 let shouldSkipTool (engine: RuleEngine) : string option =
     let actions = evaluate engine
     actions |> List.tryPick (function SkipTool tool -> Some tool | _ -> None)
+
+/// Assert a session-clear-request fact for /clear safety check.
+let assertSessionClearRequest (engine: RuleEngine) (unconsolidatedCount: int) : unit =
+    let factStr = sprintf "(session-clear-request (unconsolidated-count %d))" unconsolidatedCount
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert session-clear-request failed: %s" msg
+
+/// Check if /clear should force consolidation first (large unarchived history).
+let shouldConsolidateBeforeClear (engine: RuleEngine) : bool =
+    let actions = evaluate engine
+    actions |> List.exists (function InjectPrompt r -> r.Contains("unconsolidated") | _ -> false)
 
 /// Assert an LLM error fact for fallback eligibility evaluation.
 let assertLlmError
