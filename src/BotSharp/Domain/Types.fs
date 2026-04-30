@@ -739,6 +739,8 @@ type BotSharpConfig = {
     BraveApiKey      : ApiKey option
     MemoryWindowSize   : int                     // message count before consolidation
     MaxIterations      : int
+    SubagentMaxIterations : int                    // max iterations for spawn subagents (default 15; Python: agents.defaults.max_iterations for subagent)
+    MaxMessages        : int                       // max messages loaded from session history (0 = unlimited; Python: agents.defaults.max_messages)
     MaxToolResultChars   : int                     // tool result content cap (chars); 0 = unlimited
     ReasoningEffort      : ReasoningEffort option  // None = use model default (no explicit effort)
     Telegram             : TelegramConfig option   // None = Telegram disabled
@@ -814,6 +816,8 @@ module BotSharpConfig =
         BraveApiKey        = None
         MemoryWindowSize   = 50
         MaxIterations      = 40
+        SubagentMaxIterations = 15
+        MaxMessages        = 0    // 0 = no limit (load all session messages)
         MaxToolResultChars   = 16_000              // matches Python nanobot default
         ContextWindowTokens  = 0                   // 0 = no trimming; set e.g. 65536 for GPT-4o
         ContextBlockLimit    = None                // None = derive from ContextWindowTokens

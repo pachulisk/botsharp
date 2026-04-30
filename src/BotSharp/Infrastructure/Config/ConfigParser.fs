@@ -129,6 +129,8 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
         |> Option.defaultValue d.WorkspacePath
     let memoryWindowSize   = tryGetInt "memory_window_size"     el |> Option.defaultValue d.MemoryWindowSize
     let maxIterations      = tryGetInt "max_iterations"         el |> Option.defaultValue d.MaxIterations
+    let subagentMaxIterations = tryGetInt "subagent_max_iterations" el |> Option.defaultValue d.SubagentMaxIterations
+    let maxMessages        = tryGetInt "max_messages"            el |> Option.defaultValue d.MaxMessages
     let maxToolResultChars   = tryGetInt "max_tool_result_chars"  el |> Option.defaultValue d.MaxToolResultChars
     let contextWindowTokens  = tryGetInt "context_window_tokens" el |> Option.defaultValue d.ContextWindowTokens
     let contextBlockLimit      = tryGetInt    "context_block_limit"    el  // None = use computed budget
@@ -545,6 +547,8 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             BraveApiKey      = braveApiKey
             MemoryWindowSize   = memoryWindowSize
             MaxIterations      = maxIterations
+            SubagentMaxIterations = subagentMaxIterations
+            MaxMessages        = maxMessages
             MaxToolResultChars   = maxToolResultChars
             ReasoningEffort      = reasoningEffort
             Telegram             = telegramConfig

@@ -1230,7 +1230,19 @@ let runAgentLoop
     asyncResult {
         let sid = sessionId inbound
 
-        let! snap = liftStorage (deps.LoadSession sid)
+        let! fullSnap = liftStorage (deps.LoadSession sid)
+        // Port of nanobot#3482: max_messages caps how many messages are replayed.
+        // 0 = unlimited. When capped, only the most recent N messages are used.
+        let snap =
+            if deps.Config.MaxMessages > 0 then
+                let msgs = SessionSnapshot.messages fullSnap
+                if msgs.Length > deps.Config.MaxMessages then
+                    let trimmed = msgs |> List.skip (msgs.Length - deps.Config.MaxMessages)
+                    match SessionSnapshot.create (SessionSnapshot.id fullSnap) trimmed (SessionSnapshot.lastConsolidated fullSnap |> min trimmed.Length) (DateTimeOffset.UtcNow) (DateTimeOffset.UtcNow) with
+                    | Ok s -> s
+                    | Error _ -> fullSnap
+                else fullSnap
+            else fullSnap
 
         let (ChannelId channelName) = inbound.Channel
         let! systemPrompt = deps.BuildSystemPrompt (Some channelName) deps.Config.WorkspacePath |> AsyncResult.ofAsync

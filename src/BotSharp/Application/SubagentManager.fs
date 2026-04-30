@@ -43,7 +43,9 @@ let private buildSubagentDeps (base_: AgentDependencies) : AgentDependencies =
         LoadSession    = fun sid -> async { return Result.Ok (SessionSnapshot.empty sid DateTimeOffset.UtcNow) }
         PersistSession = fun _   -> async { return Result.Ok () }
         StreamHook     = NoStreaming   // background; no live streaming to CLI
-        CronService    = None }
+        CronService    = None
+        // Port of nanobot#3532: subagent uses SubagentMaxIterations from config
+        Config         = { base_.Config with MaxIterations = base_.Config.SubagentMaxIterations } }
 
 type SubagentManager(baseDeps: AgentDependencies, onComplete: OnSubagentComplete) =
 
