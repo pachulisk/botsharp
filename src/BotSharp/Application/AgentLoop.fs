@@ -156,6 +156,30 @@ let ensureNonEmptyResult (toolName: ToolName) (result: ToolResult) : ToolResult 
     | ToolSuccess text when String.IsNullOrWhiteSpace text -> ToolSuccess placeholder
     | other -> other
 
+// ─── Secret redaction ────────────────────────────────────────────────────────
+// Scan tool output for common API key / secret patterns and replace with [REDACTED].
+// The actual redaction is code (regex); CLIPS rules provide observability.
+
+let private secretPatterns =
+    [| Regex(@"(?i)(sk-[a-zA-Z0-9]{20,})",                         RegexOptions.Compiled)  // OpenAI
+       Regex(@"(?i)(sk-ant-[a-zA-Z0-9\-]{20,})",                   RegexOptions.Compiled)  // Anthropic
+       Regex(@"(?i)(tp-[a-zA-Z0-9]{20,})",                         RegexOptions.Compiled)  // MiMo token plan
+       Regex(@"(?i)(AIza[a-zA-Z0-9_\-]{35})",                      RegexOptions.Compiled)  // Google
+       Regex(@"(?i)(ghp_[a-zA-Z0-9]{36})",                         RegexOptions.Compiled)  // GitHub PAT
+       Regex(@"(?i)(gho_[a-zA-Z0-9]{36})",                         RegexOptions.Compiled)  // GitHub OAuth
+       Regex(@"(?i)(xoxb-[a-zA-Z0-9\-]{24,})",                    RegexOptions.Compiled)  // Slack bot
+       Regex(@"(?i)(AKIA[A-Z0-9]{16})",                            RegexOptions.Compiled)  // AWS access key
+    |]
+
+let private redactSecrets (text: string) : string * string list =
+    let mutable result = text
+    let patterns = System.Collections.Generic.List<string>()
+    for rx in secretPatterns do
+        if rx.IsMatch(result) then
+            patterns.Add(rx.ToString())
+            result <- rx.Replace(result, "[REDACTED]")
+    (result, List.ofSeq patterns)
+
 // ─── External lookup throttle ────────────────────────────────────────────────
 // Mirrors Python runner.repeated_external_lookup_error:
 // identical web_fetch (same URL) and web_search (same query) calls are blocked
@@ -1082,9 +1106,11 @@ let rec private iterate
                 | None     -> ()
             // Persist tool result messages to the snapshot so subsequent turns can reference them.
             // Mirrors Python's _save_turn which saves tool-role messages with content truncation.
+            // Secret redaction: scan tool output for API keys and replace with [REDACTED].
+            let iter = match state with ExecutingTools (_, _, i) -> i | _ -> 0
             let snap' =
                 results |> List.fold (fun s (call, res) ->
-                    let content =
+                    let rawContent =
                         match res with
                         | ToolSuccess c -> c
                         | ToolFailure e ->
@@ -1095,6 +1121,14 @@ let rec private iterate
                             | ExecutionFailed msg       -> $"[Tool failed: {msg}]"
                             | ExecutionTimeout t        -> $"[Tool timed out after {t.TotalSeconds}s]"
                             | WorkspaceViolation p      -> $"[Access denied: {p}]"
+                    // Redact secrets from tool output before persisting to session
+                    let content, redactedPatterns = redactSecrets rawContent
+                    if not redactedPatterns.IsEmpty then
+                        let (ToolName toolName) = call.Tool
+                        eprintfn "[Security] Redacted %d secret(s) from %s output" redactedPatterns.Length toolName
+                        deps.RuleEngine |> Option.iter (fun engine ->
+                            for p in redactedPatterns do
+                                BotSharp.Infrastructure.Rules.RuleEngine.assertSecretDetected engine toolName p iter)
                     SessionSnapshot.append (ToolResultMessage (call.Id, call.Tool, content)) s
                 ) snap
             // Rule engine: assert tool results and check for triggered actions.

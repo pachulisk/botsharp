@@ -92,6 +92,18 @@ let private builtinRules = """
   (slot error-kind (type STRING))
   (slot error-message (type STRING)))
 
+;; Secret detected in tool output (for alerting).
+(deftemplate secret-detected
+  (slot tool (type STRING))
+  (slot pattern (type STRING))
+  (slot iteration (type INTEGER)))
+
+;; Tool call signature for deduplication within a turn.
+(deftemplate tool-call-sig
+  (slot tool (type STRING))
+  (slot signature (type STRING))
+  (slot count (type INTEGER)))
+
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
 ;; ═══════════════════════════════════════════════════════════════
@@ -376,6 +388,32 @@ let private builtinRules = """
   (assert (action (type "allow-fallback")
                   (reason "Malformed response - fallback provider may handle the format differently")
                   (tool ""))))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Secret detection alerting
+;; When a tool output contains an API key pattern, log a warning.
+;; The actual redaction is done in F# code (regex); this rule
+;; provides observability into when redaction occurred.
+;; ═══════════════════════════════════════════════════════════════
+
+(defrule secret-leak-detected
+  (secret-detected (tool ?t) (pattern ?p) (iteration ?i))
+  =>
+  (printout t "[RuleEngine] Secret redacted in " ?t " output (pattern: " ?p ", iteration: " ?i ")" crlf))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Spawn deduplication
+;; If the same tool+signature appears with count > 1, skip it.
+;; The F# code increments count when asserting duplicate signatures.
+;; ═══════════════════════════════════════════════════════════════
+
+(defrule duplicate-tool-call
+  (tool-call-sig (tool ?t) (signature ?s) (count ?c&:(> ?c 1)))
+  (not (action (type "skip-tool")))
+  =>
+  (assert (action (type "skip-tool")
+                  (reason (str-cat "Duplicate " ?t " call: " ?s))
+                  (tool ?t))))
 """
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -510,6 +548,24 @@ let assertProviderFallback
     | Ok ()     -> ()
     | Error msg -> eprintfn "[RuleEngine] Assert provider-fallback failed: %s" msg
 
+/// Assert a secret-detected fact (for observability/alerting).
+let assertSecretDetected (engine: RuleEngine) (tool: string) (pattern: string) (iteration: int) : unit =
+    let factStr =
+        sprintf "(secret-detected (tool \"%s\") (pattern \"%s\") (iteration %d))"
+            (escapeClips tool) (escapeClips pattern) iteration
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert secret-detected failed: %s" msg
+
+/// Assert a tool call signature for dedup. Returns true if this is a duplicate.
+let assertToolCallSig (engine: RuleEngine) (tool: string) (signature: string) (count: int) : unit =
+    let factStr =
+        sprintf "(tool-call-sig (tool \"%s\") (signature \"%s\") (count %d))"
+            (escapeClips tool) (escapeClips signature) count
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert tool-call-sig failed: %s" msg
+
 // ── Evaluation ───────────────────────────────────────────────────────────
 
 /// Run the inference engine and extract any triggered actions.
@@ -534,6 +590,11 @@ let evaluate (engine: RuleEngine) : RuleAction list =
 let shouldStripReasoning (engine: RuleEngine) : bool =
     let actions = evaluate engine
     actions |> List.exists (function StripReasoning _ -> true | _ -> false)
+
+/// Check if a tool call should be skipped (duplicate detected by CLIPS).
+let shouldSkipTool (engine: RuleEngine) : string option =
+    let actions = evaluate engine
+    actions |> List.tryPick (function SkipTool tool -> Some tool | _ -> None)
 
 /// Assert an LLM error fact for fallback eligibility evaluation.
 let assertLlmError
