@@ -116,6 +116,15 @@ let private parseWorkspacePath (raw: string) : Result<string, string> =
     if s.Length = 0 then Result.Error "Workspace path cannot be empty"
     else Result.Ok (expandPath s)
 
+/// Parse fallback models: comma-separated model names.
+let private parseFallbackModels (raw: string) : Result<string list, string> =
+    let models =
+        raw.Split([| ','; ';'; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.map (fun s -> s.Trim())
+        |> Array.filter (fun s -> s.Length > 0)
+        |> Array.toList
+    Result.Ok models
+
 // ── Additional parsers for optional steps ────────────────────────────────────
 
 let private parseTelegramToken (raw: string) : Result<TelegramBotToken, string> =
@@ -144,29 +153,31 @@ let private parseGroupPolicy (raw: string) : Result<GroupPolicy, string> =
 // ── Wizard state ─────────────────────────────────────────────────────────────
 
 type private WizardState = {
-    Provider      : ProviderChoice   // typed DU — no raw strings inside the wizard
-    ApiKey        : ApiKey option
-    Model         : string
-    Temperature   : float
-    MaxTokens     : int
-    Workspace     : string
-    TelegramToken : TelegramBotToken option
-    TelegramProxy : Uri option
-    TelegramAllow : AllowList
-    TelegramGroup : GroupPolicy
+    Provider       : ProviderChoice   // typed DU — no raw strings inside the wizard
+    ApiKey         : ApiKey option
+    Model          : string
+    FallbackModels : string list
+    Temperature    : float
+    MaxTokens      : int
+    Workspace      : string
+    TelegramToken  : TelegramBotToken option
+    TelegramProxy  : Uri option
+    TelegramAllow  : AllowList
+    TelegramGroup  : GroupPolicy
 }
 
 let private defaultState = {
-    Provider      = OpenAI
-    ApiKey        = None
-    Model         = providerDefaultModel OpenAI
-    Temperature   = 0.7
-    MaxTokens     = 4096
-    Workspace     = BotSharpConfig.defaults.WorkspacePath
-    TelegramToken = None
-    TelegramProxy = None
-    TelegramAllow = AnyoneAllowed
-    TelegramGroup = MentionPolicy
+    Provider       = OpenAI
+    ApiKey         = None
+    Model          = providerDefaultModel OpenAI
+    FallbackModels = []
+    Temperature    = 0.7
+    MaxTokens      = 4096
+    Workspace      = BotSharpConfig.defaults.WorkspacePath
+    TelegramToken  = None
+    TelegramProxy  = None
+    TelegramAllow  = AnyoneAllowed
+    TelegramGroup  = MentionPolicy
 }
 
 // ── Step functions (mutually recursive for Back navigation) ──────────────────
@@ -182,7 +193,7 @@ let runWizard (configPath: string) : BotSharpConfig option =
 ╚══════════════════════════════════════════════╝"""
 
     let rec step1 (s: WizardState) =
-        printfn "\nStep 1/6 — LLM Provider"
+        printfn "\nStep 1/7 — LLM Provider"
         printfn "  1) OpenAI   2) Anthropic   3) Gemini   4) DeepSeek   5) Ollama"
         match prompt (sprintf "Provider [%s]" (providerChoiceName s.Provider)) parseProviderChoice with
         | Quit    -> None
@@ -196,7 +207,7 @@ let runWizard (configPath: string) : BotSharpConfig option =
             step2 { s with Provider = v; Model = model }
 
     and step2 (s: WizardState) =
-        printfn "\nStep 2/6 — API Key (for %s)" (providerChoiceName s.Provider)
+        printfn "\nStep 2/7 — API Key (for %s)" (providerChoiceName s.Provider)
         printfn "  Leave blank to configure via environment variable later"
         match prompt "API key [skip]" parseApiKey with
         | Quit    -> None
@@ -205,7 +216,7 @@ let runWizard (configPath: string) : BotSharpConfig option =
         | Value k -> step3 { s with ApiKey = Some k }
 
     and step3 (s: WizardState) =
-        printfn "\nStep 3/6 — Model"
+        printfn "\nStep 3/7 — Model"
         match prompt (sprintf "Model [%s]" s.Model) parseModel with
         | Quit    -> None
         | Back    -> step2 s
@@ -213,52 +224,63 @@ let runWizard (configPath: string) : BotSharpConfig option =
         | Value m -> step4 { s with Model = m }
 
     and step4 (s: WizardState) =
-        printfn "\nStep 4/6 — Temperature (0.0–2.0)"
-        match prompt (sprintf "Temperature [%.1f]" s.Temperature) parseTemperature with
+        printfn "\nStep 4/7 — Fallback models (optional)"
+        printfn "  If the primary model fails (429, timeout, 5xx), try these in order."
+        printfn "  Comma-separated model names, e.g.: deepseek-v4-pro, gpt-4o"
+        let current = if s.FallbackModels.IsEmpty then "none" else String.concat ", " s.FallbackModels
+        match prompt (sprintf "Fallback models [%s]" current) parseFallbackModels with
         | Quit    -> None
         | Back    -> step3 s
         | Skip    -> step5 s
-        | Value t -> step5 { s with Temperature = t }
+        | Value m -> step5 { s with FallbackModels = m }
 
     and step5 (s: WizardState) =
-        printfn "\nStep 5/6 — Workspace path"
-        match prompt (sprintf "Workspace [%s]" s.Workspace) parseWorkspacePath with
+        printfn "\nStep 5/7 — Temperature (0.0–2.0)"
+        match prompt (sprintf "Temperature [%.1f]" s.Temperature) parseTemperature with
         | Quit    -> None
         | Back    -> step4 s
         | Skip    -> step6 s
-        | Value w -> step6 { s with Workspace = w }
+        | Value t -> step6 { s with Temperature = t }
 
     and step6 (s: WizardState) =
-        printfn "\nStep 6/6 — Telegram bot (optional)"
+        printfn "\nStep 6/7 — Workspace path"
+        match prompt (sprintf "Workspace [%s]" s.Workspace) parseWorkspacePath with
+        | Quit    -> None
+        | Back    -> step5 s
+        | Skip    -> step7 s
+        | Value w -> step7 { s with Workspace = w }
+
+    and step7 (s: WizardState) =
+        printfn "\nStep 7/7 — Telegram bot (optional)"
         printfn "  Leave blank to skip — you can add it to config.json later."
         printfn "  Get a token from @BotFather on Telegram."
         match prompt "Bot token [skip]" parseTelegramToken with
         | Quit    -> None
-        | Back    -> step5 s
+        | Back    -> step6 s
         | Skip    -> finish { s with TelegramToken = None }
         | Value t ->
             // Ask allow_from
             let s1 = { s with TelegramToken = Some t }
             match prompt "Allow from (* = anyone, or comma-separated IDs) [*]" parseAllowFrom with
             | Quit    -> None
-            | Back    -> step6 s
-            | Skip    -> step6b { s1 with TelegramAllow = AnyoneAllowed }
-            | Value a -> step6b { s1 with TelegramAllow = a }
+            | Back    -> step7 s
+            | Skip    -> step7b { s1 with TelegramAllow = AnyoneAllowed }
+            | Value a -> step7b { s1 with TelegramAllow = a }
 
-    and step6b (s: WizardState) =
+    and step7b (s: WizardState) =
         // Group policy (only relevant if token was provided)
         printfn "\n  Group policy:  1) mention (respond only when @mentioned)  2) open (respond to all)"
         match prompt "Group policy [mention]" parseGroupPolicy with
         | Quit    -> None
-        | Back    -> step6 s
-        | Skip    -> step6c { s with TelegramGroup = MentionPolicy }
-        | Value g -> step6c { s with TelegramGroup = g }
+        | Back    -> step7 s
+        | Skip    -> step7c { s with TelegramGroup = MentionPolicy }
+        | Value g -> step7c { s with TelegramGroup = g }
 
-    and step6c (s: WizardState) =
+    and step7c (s: WizardState) =
         // Proxy (optional)
         match prompt "HTTP proxy (optional) [skip]" parseProxy with
         | Quit    -> None
-        | Back    -> step6b s
+        | Back    -> step7b s
         | Skip    -> finish { s with TelegramProxy = None }
         | Value p -> finish { s with TelegramProxy = Some p }
 
@@ -291,6 +313,7 @@ let runWizard (configPath: string) : BotSharpConfig option =
             BotSharpConfig.defaults with
                 DefaultProvider = providerName
                 DefaultModel    = s.Model
+                FallbackModels  = s.FallbackModels
                 Temperature     = s.Temperature
                 MaxTokens       = s.MaxTokens
                 WorkspacePath   = expandPath s.Workspace
