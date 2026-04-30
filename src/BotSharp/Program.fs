@@ -593,6 +593,12 @@ This file stores important information that persists across sessions.
             autoCompactTtl)
     autoCompactSvc.Start()
 
+    // ── Session cleanup service (delete expired session files) ──────────────
+    let sessionCleanupSvc =
+        BotSharp.Application.SessionCleanupService.SessionCleanupService(
+            config.WorkspacePath, config.SessionCleanupDays, ruleEngine)
+    sessionCleanupSvc.Start()
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Mode dispatch: gateway (headless) vs CLI (interactive)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -675,6 +681,7 @@ This file stores important information that persists across sessions.
         wsServerOpt |> Option.iter (fun s -> s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
+        sessionCleanupSvc.Stop()
         disposeMcp ()
         0
 
@@ -741,5 +748,6 @@ This file stores important information that persists across sessions.
         wsServerOpt  |> Option.iter (fun s -> s.Stop())
         iaServerOpt  |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
+        sessionCleanupSvc.Stop()
         disposeMcp ()
         0

@@ -146,6 +146,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 | s         -> Some s
             else None)
     let sessionTtlMinutes  = tryGetInt    "session_ttl_minutes"  el |> Option.defaultValue d.SessionTtlMinutes
+    let sessionCleanupDays = tryGetInt    "session_cleanup_days" el |> Option.defaultValue d.SessionCleanupDays
     let timezone           = tryGetString "timezone"             el  // None = use system local timezone
     let execTimeoutSeconds = tryGetInt    "exec_timeout_seconds" el |> Option.defaultValue d.ExecTimeoutSeconds
     let execSandbox        = tryGetString "exec_sandbox"         el |> Option.defaultValue d.ExecSandbox
@@ -559,6 +560,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             FailOnToolError      = failOnToolError
             DisabledSkills       = disabledSkills
             SessionTtlMinutes    = sessionTtlMinutes
+            SessionCleanupDays   = sessionCleanupDays
             Timezone             = timezone
             ExecTimeoutSeconds   = execTimeoutSeconds
             HeartbeatEnabled              = heartbeatEnabled

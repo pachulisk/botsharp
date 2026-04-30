@@ -66,6 +66,7 @@
     <Compile Include="Application/SessionActor.fs" />
     <Compile Include="Application/HeartbeatService.fs" />
     <Compile Include="Application/AutoCompactService.fs" />
+    <Compile Include="Application/SessionCleanupService.fs" />
     <Compile Include="Application/SubagentManager.fs" />
 
     <!-- SpawnTool and LongTaskTool after SubagentManager (Application layer dep) -->
