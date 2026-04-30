@@ -793,6 +793,7 @@ type BotSharpConfig = {
     Discord                : DiscordChannelConfig option      // None = Discord disabled
     Slack                  : SlackChannelConfig option        // None = Slack disabled
     Feishu                 : FeishuChannelConfig option       // None = Feishu/Lark disabled
+    DingTalk               : DingTalkChannelConfig option     // None = DingTalk disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -815,6 +816,13 @@ and FeishuChannelConfig = {
     VerificationToken  : string
     AllowFrom          : AllowList
     WebhookPort        : int
+}
+
+and DingTalkChannelConfig = {
+    ClientId     : string
+    ClientSecret : string
+    AllowFrom    : AllowList
+    WebhookPort  : int
 }
 
 and InterAgentChannelConfig = {
@@ -894,6 +902,7 @@ module BotSharpConfig =
         Discord            = None
         Slack              = None
         Feishu             = None
+        DingTalk           = None
         InterAgent         = None
         FallbackModels     = []
     }

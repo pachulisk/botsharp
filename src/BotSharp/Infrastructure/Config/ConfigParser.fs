@@ -569,6 +569,24 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 Some { AppId = appId; AppSecret = appSecret; VerificationToken = verToken; AllowFrom = allowFrom; WebhookPort = port } : FeishuChannelConfig option
             | _ -> None
 
+    // ── Parse optional [dingtalk] section ────────────────────────────────────
+    let dingtalkConfig =
+        match tryGetObject "dingtalk" el with
+        | None -> None
+        | Some dt ->
+            match tryGetString "client_id" dt, tryGetString "client_secret" dt with
+            | Some clientId, Some clientSecret ->
+                let allowFrom =
+                    match tryGetArray "allow_from" dt with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                let port = match tryGetInt "webhook_port" dt with Some p -> p | None -> 19801
+                Some { ClientId = clientId; ClientSecret = clientSecret; AllowFrom = allowFrom; WebhookPort = port } : DingTalkChannelConfig option
+            | _ -> None
+
     let interAgentConfig =
         match tryGetObject "inter_agent" el with
         | None -> None
@@ -656,6 +674,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             Discord                = discordConfig
             Slack                  = slackConfig
             Feishu                 = feishuConfig
+            DingTalk               = dingtalkConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

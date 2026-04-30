@@ -547,6 +547,18 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start())
         server
 
+    // ── DingTalk server (start function, shared by both modes) ─────────────
+    let startDingTalkServer (dtCfg: DingTalkChannelConfig) =
+        let dtDeps = { deps with StreamHook = NoStreaming }
+        let dtCoordinator = AgentCoordinator(dtDeps)
+        let dtConfig : BotSharp.Infrastructure.Channels.DingTalkChannel.DingTalkConfig = {
+            ClientId = dtCfg.ClientId; ClientSecret = dtCfg.ClientSecret
+            AllowFrom = dtCfg.AllowFrom; WebhookPort = dtCfg.WebhookPort
+        }
+        let server = BotSharp.Infrastructure.Channels.DingTalkChannel.DingTalkServer(dtCoordinator, dtConfig, httpClient)
+        Async.Start(server.Start())
+        server
+
     // ── Inter-agent server (start function, shared by both modes) ──────────
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
@@ -688,6 +700,12 @@ This file stores important information that persists across sessions.
             | Some fsCfg -> Some (startFeishuServer fsCfg)
             | None -> None
 
+        // DingTalk: start if configured
+        let dtServerOpt =
+            match config.DingTalk with
+            | Some dtCfg -> Some (startDingTalkServer dtCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -741,6 +759,7 @@ This file stores important information that persists across sessions.
         dcServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         slServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         fsServerOpt |> Option.iter (fun s -> s.Stop())
+        dtServerOpt |> Option.iter (fun s -> s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -801,6 +820,12 @@ This file stores important information that persists across sessions.
             | Some fsCfg -> Some (startFeishuServer fsCfg)
             | None -> None
 
+        // DingTalk: start if configured
+        let dtServerOpt =
+            match config.DingTalk with
+            | Some dtCfg -> Some (startDingTalkServer dtCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -829,6 +854,7 @@ This file stores important information that persists across sessions.
         dcServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         slServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         fsServerOpt  |> Option.iter (fun s -> s.Stop())
+        dtServerOpt  |> Option.iter (fun s -> s.Stop())
         iaServerOpt  |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()

@@ -91,6 +91,9 @@
     <!-- Feishu/Lark channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/FeishuChannel.fs" />
 
+    <!-- DingTalk channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/DingTalkChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 
