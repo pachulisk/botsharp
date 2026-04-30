@@ -534,6 +534,19 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(), cts.Token)
         (server, cts)
 
+    // ── Feishu server (start function, shared by both modes) ───────────────
+    let startFeishuServer (fsCfg: FeishuChannelConfig) =
+        let fsDeps = { deps with StreamHook = NoStreaming }
+        let fsCoordinator = AgentCoordinator(fsDeps)
+        let fsConfig : BotSharp.Infrastructure.Channels.FeishuChannel.FeishuConfig = {
+            AppId = fsCfg.AppId; AppSecret = fsCfg.AppSecret
+            VerificationToken = fsCfg.VerificationToken
+            AllowFrom = fsCfg.AllowFrom; WebhookPort = fsCfg.WebhookPort
+        }
+        let server = BotSharp.Infrastructure.Channels.FeishuChannel.FeishuServer(fsCoordinator, fsConfig, httpClient)
+        Async.Start(server.Start())
+        server
+
     // ── Inter-agent server (start function, shared by both modes) ──────────
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
@@ -669,6 +682,12 @@ This file stores important information that persists across sessions.
             | Some slCfg -> Some (startSlackServer slCfg)
             | None -> None
 
+        // Feishu: start if configured
+        let fsServerOpt =
+            match config.Feishu with
+            | Some fsCfg -> Some (startFeishuServer fsCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -721,6 +740,7 @@ This file stores important information that persists across sessions.
         wsServerOpt |> Option.iter (fun s -> s.Stop())
         dcServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         slServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        fsServerOpt |> Option.iter (fun s -> s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -775,6 +795,12 @@ This file stores important information that persists across sessions.
             | Some slCfg -> Some (startSlackServer slCfg)
             | None -> None
 
+        // Feishu: start if configured
+        let fsServerOpt =
+            match config.Feishu with
+            | Some fsCfg -> Some (startFeishuServer fsCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -802,6 +828,7 @@ This file stores important information that persists across sessions.
         wsServerOpt  |> Option.iter (fun s -> s.Stop())
         dcServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         slServerOpt  |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        fsServerOpt  |> Option.iter (fun s -> s.Stop())
         iaServerOpt  |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()

@@ -88,6 +88,9 @@
     <!-- Slack channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/SlackChannel.fs" />
 
+    <!-- Feishu/Lark channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/FeishuChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 

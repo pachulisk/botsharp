@@ -550,6 +550,25 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 Some { BotToken = botToken; AppToken = appToken; AllowFrom = allowFrom; ReplyInThread = replyInThread } : SlackChannelConfig option
             | _ -> None
 
+    // ── Parse optional [feishu] section ──────────────────────────────────────
+    let feishuConfig =
+        match tryGetObject "feishu" el with
+        | None -> None
+        | Some fs ->
+            match tryGetString "app_id" fs, tryGetString "app_secret" fs with
+            | Some appId, Some appSecret ->
+                let verToken = match tryGetString "verification_token" fs with Some v -> v | None -> ""
+                let allowFrom =
+                    match tryGetArray "allow_from" fs with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                let port = match tryGetInt "webhook_port" fs with Some p -> p | None -> 19800
+                Some { AppId = appId; AppSecret = appSecret; VerificationToken = verToken; AllowFrom = allowFrom; WebhookPort = port } : FeishuChannelConfig option
+            | _ -> None
+
     let interAgentConfig =
         match tryGetObject "inter_agent" el with
         | None -> None
@@ -636,6 +655,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             ApiHost                = apiHost
             Discord                = discordConfig
             Slack                  = slackConfig
+            Feishu                 = feishuConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

@@ -792,6 +792,7 @@ type BotSharpConfig = {
     ApiHost                : string                    // listen address for API server (Python: api.host; default "localhost")
     Discord                : DiscordChannelConfig option      // None = Discord disabled
     Slack                  : SlackChannelConfig option        // None = Slack disabled
+    Feishu                 : FeishuChannelConfig option       // None = Feishu/Lark disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -806,6 +807,14 @@ and SlackChannelConfig = {
     AppToken      : string
     AllowFrom     : AllowList
     ReplyInThread : bool
+}
+
+and FeishuChannelConfig = {
+    AppId              : string
+    AppSecret          : string
+    VerificationToken  : string
+    AllowFrom          : AllowList
+    WebhookPort        : int
 }
 
 and InterAgentChannelConfig = {
@@ -884,6 +893,7 @@ module BotSharpConfig =
         Ws                 = None
         Discord            = None
         Slack              = None
+        Feishu             = None
         InterAgent         = None
         FallbackModels     = []
     }
