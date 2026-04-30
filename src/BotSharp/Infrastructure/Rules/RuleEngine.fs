@@ -74,6 +74,9 @@ let private builtinRules = """
   (slot handoff-length (type INTEGER))
   (slot status (type STRING)))
 
+(deftemplate inter-agent-response
+  (slot content (type STRING)))
+
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
 ;; ═══════════════════════════════════════════════════════════════
@@ -198,6 +201,29 @@ let private builtinRules = """
   (assert (action (type "stop-loop")
                   (reason "Long task: handoff summaries shrinking rapidly - subagent losing track of progress")
                   (tool "long_task"))))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Inter-agent consensus detection
+;; Users can add custom signal words via workspace/rules/*.clp
+;; ═══════════════════════════════════════════════════════════════
+
+;; Chinese consensus signals
+(defrule inter-agent-consensus-zh
+  (inter-agent-response (content ?c&:(or (str-index "最终方案" ?c) (str-index "讨论结束" ?c) (str-index "达成共识" ?c) (str-index "已确认" ?c))))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason "consensus-reached")
+                  (tool "interagent"))))
+
+;; English consensus signals
+(defrule inter-agent-consensus-en
+  (inter-agent-response (content ?c&:(or (str-index "final proposal" ?c) (str-index "discussion complete" ?c) (str-index "consensus reached" ?c) (str-index "DISCUSSION_COMPLETE" ?c))))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason "consensus-reached")
+                  (tool "interagent"))))
 """
 
 // ── Lifecycle ────────────────────────────────────────────────────────────

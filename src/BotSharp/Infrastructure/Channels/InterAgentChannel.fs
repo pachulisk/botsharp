@@ -18,71 +18,133 @@ open BotSharp.Application.SessionActor
 // Multiple agents can collaborate autonomously without human mediation.
 //
 // Design: Async Task Model (port of nanobot PR #2002)
-//   POST /inter-agent/chat          → 202 {task_id, status: "pending"}
-//   GET  /inter-agent/task/{task_id} → {status, response, is_final}
-//   GET  /inter-agent/health         → {status: "ok", instance, port}
+//   POST /inter-agent/chat          → 202 {task_id, status}
+//   GET  /inter-agent/task/{task_id} → poll for result
+//   GET  /inter-agent/health         → instance health check
 //
-// The initiating agent submits a task and polls for result — no blocking.
+// Type-driven design:
+//   - TaskOutcome DU replaces bool IsFinal + string option Response/Error
+//   - ChatRequest parsed type replaces raw string validation
+//   - Consensus detection via CLIPS rules (not hardcoded bool function)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Task registry ────────────────────────────────────────────────────────
+// ── Task lifecycle (type-driven) ─────────────────────────────────────────
 
-type TaskStatus =
-    | Pending
-    | Running
-    | Done
-    | Failed
+/// The outcome of a completed task — no bool flags needed.
+type TaskOutcome =
+    | InProgress                                   // task is still running
+    | Completed of response: string * consensus: bool  // agent replied
+    | Faulted   of error: string                   // agent loop error
 
-let private taskStatusString = function
-    | Pending -> "pending"
-    | Running -> "running"
-    | Done    -> "done"
-    | Failed  -> "failed"
+/// The full lifecycle state of an inter-agent task.
+type TaskPhase =
+    | Queued                          // received, not yet dispatched
+    | Processing                     // agent loop is working
+    | Finished of TaskOutcome * finishedAt: DateTimeOffset  // terminal
 
 type AgentTask = {
-    TaskId        : string
-    SessionId     : string
-    FromInstance   : string
-    RoundCount    : int
-    mutable Status     : TaskStatus
-    mutable Response   : string option
-    mutable IsFinal    : bool
-    mutable Error      : string option
-    CreatedAt     : DateTimeOffset
-    mutable FinishedAt : DateTimeOffset option
+    TaskId      : string
+    Request     : ChatRequest
+    CreatedAt   : DateTimeOffset
+    mutable Phase : TaskPhase
 }
+
+/// A validated chat request — if this value exists, all required fields are present.
+/// Replaces the `if message = "" || sessionId = ""` bool check.
+and ChatRequest = {
+    Message      : string        // guaranteed non-empty by parse
+    SessionId    : string        // guaranteed non-empty by parse
+    FromInstance : string
+    RoundCount   : int
+}
+
+/// Parse a raw JSON body into a ChatRequest. Returns Error for invalid input.
+let private parseChatRequest (body: JsonElement) : Result<ChatRequest, string> =
+    let getString (name: string) =
+        match body.TryGetProperty(name) with
+        | true, el when el.ValueKind = JsonValueKind.String ->
+            match el.GetString() with null -> None | s -> let t = s.Trim() in if t = "" then None else Some t
+        | _ -> None
+    let getInt (name: string) =
+        match body.TryGetProperty(name) with
+        | true, el when el.ValueKind = JsonValueKind.Number -> Some (el.GetInt32())
+        | _ -> None
+    match getString "message", getString "session_id" with
+    | None, _    -> Error "message is required"
+    | _, None    -> Error "session_id is required"
+    | Some msg, Some sid ->
+        Ok {
+            Message      = msg
+            SessionId    = sid
+            FromInstance = getString "from_instance" |> Option.defaultValue "unknown"
+            RoundCount   = getInt "round_count" |> Option.defaultValue 0
+        }
+
+// ── Task serialization ───────────────────────────────────────────────────
+
+let private phaseToStatus = function
+    | Queued       -> "pending"
+    | Processing   -> "running"
+    | Finished _   -> "done"  // overridden for Faulted below
 
 let private taskToJson (instanceName: string) (task: AgentTask) : string =
     use ms = new MemoryStream()
     use w = new Utf8JsonWriter(ms)
     w.WriteStartObject()
     w.WriteString("task_id", task.TaskId)
-    w.WriteString("status", taskStatusString task.Status)
     w.WriteString("instance", instanceName)
-    w.WriteString("session_id", task.SessionId)
-    w.WriteNumber("round_count", task.RoundCount)
-    match task.Status with
-    | Done ->
-        w.WriteString("response", task.Response |> Option.defaultValue "")
-        w.WriteBoolean("is_final", task.IsFinal)
-    | Failed ->
-        w.WriteString("error", task.Error |> Option.defaultValue "")
-    | _ -> ()
+    w.WriteString("session_id", task.Request.SessionId)
+    w.WriteNumber("round_count", task.Request.RoundCount)
+    match task.Phase with
+    | Queued ->
+        w.WriteString("status", "pending")
+    | Processing ->
+        w.WriteString("status", "running")
+    | Finished (Completed (response, consensus), _) ->
+        w.WriteString("status", "done")
+        w.WriteString("response", response)
+        w.WriteBoolean("is_final", consensus)
+    | Finished (Faulted error, _) ->
+        w.WriteString("status", "failed")
+        w.WriteString("error", error)
+    | Finished (InProgress, _) ->
+        w.WriteString("status", "running")  // shouldn't happen, defensive
     w.WriteEndObject()
     w.Flush()
     Encoding.UTF8.GetString(ms.ToArray())
 
-// ── Consensus detection ──────────────────────────────────────────────────
+// ── Consensus detection via CLIPS ────────────────────────────────────────
+// Instead of a hardcoded `isFinal` bool function, we assert a fact into
+// the rule engine and let CLIPS rules determine consensus.
+// Users can add custom signal words via workspace/rules/*.clp.
 
-let private finalSignals = [
-    "最终方案"; "讨论结束"; "达成共识"; "已确认"
-    "final proposal"; "discussion complete"; "consensus reached"
-    "DISCUSSION_COMPLETE"
-]
-
-let private isFinal (text: string) : bool =
-    let lower = text.ToLowerInvariant()
-    finalSignals |> List.exists (fun s -> lower.Contains(s.ToLowerInvariant()))
+let private detectConsensus
+    (ruleEngine : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
+    (text       : string)
+    : bool =
+    match ruleEngine with
+    | None ->
+        // Fallback when CLIPS is not available: hardcoded signals
+        let lower = text.ToLowerInvariant()
+        [ "最终方案"; "讨论结束"; "达成共识"; "已确认"
+          "final proposal"; "discussion complete"; "consensus reached"
+          "DISCUSSION_COMPLETE" ]
+        |> List.exists (fun s -> lower.Contains(s.ToLowerInvariant()))
+    | Some engine ->
+        // Assert the response text as a fact and let rules decide
+        let escaped = text.Replace("\\", "\\\\").Replace("\"", "\\\"")
+        let truncated = if escaped.Length > 500 then escaped.[..499] else escaped
+        let factStr = sprintf "(inter-agent-response (content \"%s\"))" truncated
+        match BotSharp.Infrastructure.Rules.ClipsEnvironment.assertFact engine.Env factStr with
+        | Ok () ->
+            let actions = BotSharp.Infrastructure.Rules.RuleEngine.evaluate engine
+            let isConsensus =
+                actions |> List.exists (function
+                    | BotSharp.Infrastructure.Rules.RuleEngine.StopLoop reason ->
+                        reason.Contains("consensus")
+                    | _ -> false)
+            isConsensus
+        | Error _ -> false
 
 // ── JSON helpers ─────────────────────────────────────────────────────────
 
@@ -134,7 +196,7 @@ let private pushAudit
 
 // ── Server ───────────────────────────────────────────────────────────────
 
-type InterAgentServer(coordinator: AgentCoordinator, config: InterAgentChannelConfig, httpClient: HttpClient) =
+type InterAgentServer(coordinator: AgentCoordinator, config: InterAgentChannelConfig, httpClient: HttpClient, ruleEngine: BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option) =
     let listener = new HttpListener()
     let tasks    = ConcurrentDictionary<string, AgentTask>()
 
@@ -142,11 +204,10 @@ type InterAgentServer(coordinator: AgentCoordinator, config: InterAgentChannelCo
         let cutoff = DateTimeOffset.UtcNow.AddSeconds(- float config.TaskTtlSeconds)
         let toDelete =
             tasks
-            |> Seq.filter (fun kv ->
-                (kv.Value.Status = Done || kv.Value.Status = Failed) &&
-                kv.Value.FinishedAt.IsSome &&
-                kv.Value.FinishedAt.Value < cutoff)
-            |> Seq.map (fun kv -> kv.Key)
+            |> Seq.choose (fun kv ->
+                match kv.Value.Phase with
+                | Finished (_, finishedAt) when finishedAt < cutoff -> Some kv.Key
+                | _ -> None)
             |> Seq.toList
         for tid in toDelete do
             tasks.TryRemove(tid) |> ignore
@@ -163,76 +224,52 @@ type InterAgentServer(coordinator: AgentCoordinator, config: InterAgentChannelCo
             | Error _ ->
                 do! writeJsonError ctx 400 "invalid JSON"
             | Ok body ->
-                let getString (name: string) =
-                    match body.TryGetProperty(name) with
-                    | true, el when el.ValueKind = JsonValueKind.String -> el.GetString() |> Option.ofObj
-                    | _ -> None
-                let getInt (name: string) =
-                    match body.TryGetProperty(name) with
-                    | true, el when el.ValueKind = JsonValueKind.Number -> Some (el.GetInt32())
-                    | _ -> None
-
-                let message      = getString "message" |> Option.map (fun s -> s.Trim()) |> Option.defaultValue ""
-                let sessionId    = getString "session_id" |> Option.defaultValue ""
-                let fromInstance = getString "from_instance" |> Option.defaultValue "unknown"
-                let roundCount   = getInt "round_count" |> Option.defaultValue 0
-
-                if message = "" || sessionId = "" then
-                    do! writeJsonError ctx 400 "message and session_id are required"
-                else
+                // Parse, don't validate: ChatRequest type guarantees all required fields
+                match parseChatRequest body with
+                | Error msg ->
+                    do! writeJsonError ctx 400 msg
+                | Ok req ->
                     let taskId = Guid.NewGuid().ToString()
                     let task = {
-                        TaskId       = taskId
-                        SessionId    = sessionId
-                        FromInstance = fromInstance
-                        RoundCount   = roundCount
-                        Status       = Pending
-                        Response     = None
-                        IsFinal      = false
-                        Error        = None
-                        CreatedAt    = DateTimeOffset.UtcNow
-                        FinishedAt   = None
+                        TaskId    = taskId
+                        Request   = req
+                        CreatedAt = DateTimeOffset.UtcNow
+                        Phase     = Processing
                     }
                     tasks.[taskId] <- task
 
                     eprintfn "[InterAgent] Task %s created | from=%s session=%s round=%d"
-                        taskId fromInstance sessionId roundCount
+                        taskId req.FromInstance req.SessionId req.RoundCount
 
                     // Audit: inbound
                     match config.AuditWebhookUrl with
-                    | Some url -> Async.Start(pushAudit httpClient url fromInstance config.InstanceName sessionId roundCount message)
+                    | Some url -> Async.Start(pushAudit httpClient url req.FromInstance config.InstanceName req.SessionId req.RoundCount req.Message)
                     | None -> ()
 
                     // Route to agent loop (non-blocking)
-                    task.Status <- Running
                     Async.Start(async {
                         let inbound : InboundMessage = {
                             Channel            = ChannelId "interagent"
-                            Sender             = UserId fromInstance
+                            Sender             = UserId req.FromInstance
                             Chat               = ChatId taskId
-                            Input              = ChatMessage (message, [])
+                            Input              = ChatMessage (req.Message, [])
                             Metadata           = Map.ofList [
-                                "from_instance", fromInstance
-                                "session_id", sessionId
-                                "round_count", string roundCount ]
+                                "from_instance", req.FromInstance
+                                "session_id", req.SessionId
+                                "round_count", string req.RoundCount ]
                             SessionKeyOverride = Some (SessionId $"interagent:{taskId}")
                         }
                         let! result = coordinator.Route inbound
                         match result with
                         | Result.Ok (PlainResponse text) | Result.Ok (StreamedResponse text) ->
-                            task.Status <- Done
-                            task.Response <- Some text
-                            task.IsFinal <- isFinal text
-                            task.FinishedAt <- Some DateTimeOffset.UtcNow
-                            eprintfn "[InterAgent] Task %s done (session=%s)" taskId sessionId
-                            // Audit: outbound
+                            let consensus = detectConsensus ruleEngine text
+                            task.Phase <- Finished (Completed (text, consensus), DateTimeOffset.UtcNow)
+                            eprintfn "[InterAgent] Task %s done (session=%s, consensus=%b)" taskId req.SessionId consensus
                             match config.AuditWebhookUrl with
-                            | Some url -> do! pushAudit httpClient url config.InstanceName fromInstance sessionId roundCount text
+                            | Some url -> do! pushAudit httpClient url config.InstanceName req.FromInstance req.SessionId req.RoundCount text
                             | None -> ()
                         | Result.Error e ->
-                            task.Status <- Failed
-                            task.Error <- Some (sprintf "%A" e)
-                            task.FinishedAt <- Some DateTimeOffset.UtcNow
+                            task.Phase <- Finished (Faulted (sprintf "%A" e), DateTimeOffset.UtcNow)
                             eprintfn "[InterAgent] Task %s failed: %A" taskId e
                     })
 
@@ -282,7 +319,6 @@ type InterAgentServer(coordinator: AgentCoordinator, config: InterAgentChannelCo
             printfn "[InterAgent]   GET  /inter-agent/task/{{id}}     Poll task status"
             printfn "[InterAgent]   GET  /inter-agent/health         Health check"
 
-            // Eviction timer
             let evictionTimer = new Timer((fun _ -> evictOldTasks ()), null, 60_000, 60_000)
 
             try

@@ -496,7 +496,7 @@ This file stores important information that persists across sessions.
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
         let iaCoordinator = AgentCoordinator(iaDeps)
-        let server = BotSharp.Infrastructure.Channels.InterAgentChannel.InterAgentServer(iaCoordinator, iaCfg, httpClient)
+        let server = BotSharp.Infrastructure.Channels.InterAgentChannel.InterAgentServer(iaCoordinator, iaCfg, httpClient, ruleEngine)
         Async.Start(server.Start())
         server
 
