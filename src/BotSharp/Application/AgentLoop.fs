@@ -653,8 +653,20 @@ let private chatWithRetrySingle
         }
     go (List.length delays) delays
 
+/// Strip reasoning_content from messages when falling back to a different provider.
+/// Different providers have incompatible reasoning formats (e.g. MiMo vs DeepSeek).
+/// Sending MiMo's reasoning_content to DeepSeek causes:
+///   "The reasoning_content in the thinking mode must be passed back to the API."
+let private stripReasoningContent (messages: Message list) : Message list =
+    messages |> List.map (function
+        | AssistantMessage (content, Some _) -> AssistantMessage (content, None)
+        | ToolCallMessage (calls, Some _)    -> ToolCallMessage (calls, None)
+        | other                              -> other)
+
 /// Try the primary provider, then fallback providers in order.
 /// Each provider gets its full retry budget before moving to the next.
+/// When falling back, reasoning_content is stripped from messages to avoid
+/// cross-provider incompatibility.
 let chatWithRetry
     (primary   : LLMProvider)
     (fallbacks : LLMProvider list)
@@ -667,6 +679,8 @@ let chatWithRetry
         match result with
         | Ok _ -> return result
         | Error primaryErr ->
+            // Strip reasoning_content: different providers have incompatible formats
+            let cleanMessages = stripReasoningContent messages
             let rec tryFallbacks remaining =
                 async {
                     match remaining with
@@ -675,7 +689,7 @@ let chatWithRetry
                         let primaryId = (primary : LLMProvider).Id
                         let fbId = (fb : LLMProvider).Id
                         eprintfn "[Fallback] Primary provider '%s' failed, trying '%s'" primaryId fbId
-                        let! fbResult = chatWithRetrySingle fb settings messages tools
+                        let! fbResult = chatWithRetrySingle fb settings cleanMessages tools
                         match fbResult with
                         | Ok _ -> return fbResult
                         | Error _ -> return! tryFallbacks rest
