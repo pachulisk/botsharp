@@ -587,6 +587,34 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 Some { ClientId = clientId; ClientSecret = clientSecret; AllowFrom = allowFrom; WebhookPort = port } : DingTalkChannelConfig option
             | _ -> None
 
+    // ── Parse optional [email] section ───────────────────────────────────────
+    let emailConfig =
+        match tryGetObject "email" el with
+        | None -> None
+        | Some em ->
+            match tryGetString "username" em, tryGetString "password" em,
+                  tryGetString "imap_host" em, tryGetString "smtp_host" em with
+            | Some username, Some password, Some imapHost, Some smtpHost ->
+                let allowFrom =
+                    match tryGetArray "allow_from" em with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                Some {
+                    ImapHost = imapHost
+                    ImapPort = match tryGetInt "imap_port" em with Some p -> p | None -> 993
+                    ImapUseSsl = match tryGetBool "imap_use_ssl" em with Some b -> b | None -> true
+                    SmtpHost = smtpHost
+                    SmtpPort = match tryGetInt "smtp_port" em with Some p -> p | None -> 587
+                    SmtpUseTls = match tryGetBool "smtp_use_tls" em with Some b -> b | None -> true
+                    Username = username; Password = password
+                    PollSeconds = match tryGetInt "poll_interval_seconds" em with Some s -> s | None -> 30
+                    AllowFrom = allowFrom
+                } : EmailChannelConfig option
+            | _ -> None
+
     let interAgentConfig =
         match tryGetObject "inter_agent" el with
         | None -> None
@@ -675,6 +703,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             Slack                  = slackConfig
             Feishu                 = feishuConfig
             DingTalk               = dingtalkConfig
+            Email                  = emailConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

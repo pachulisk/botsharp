@@ -559,6 +559,21 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start())
         server
 
+    // ── Email server (start function, shared by both modes) ────────────────
+    let startEmailServer (emCfg: EmailChannelConfig) =
+        let emDeps = { deps with StreamHook = NoStreaming }
+        let emCoordinator = AgentCoordinator(emDeps)
+        let emConfig : BotSharp.Infrastructure.Channels.EmailChannel.EmailConfig = {
+            ImapHost = emCfg.ImapHost; ImapPort = emCfg.ImapPort; ImapUseSsl = emCfg.ImapUseSsl
+            SmtpHost = emCfg.SmtpHost; SmtpPort = emCfg.SmtpPort; SmtpUseTls = emCfg.SmtpUseTls
+            Username = emCfg.Username; Password = emCfg.Password
+            PollSeconds = emCfg.PollSeconds; AllowFrom = emCfg.AllowFrom
+        }
+        let server = BotSharp.Infrastructure.Channels.EmailChannel.EmailServer(emCoordinator, emConfig)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── Inter-agent server (start function, shared by both modes) ──────────
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
@@ -706,6 +721,12 @@ This file stores important information that persists across sessions.
             | Some dtCfg -> Some (startDingTalkServer dtCfg)
             | None -> None
 
+        // Email: start if configured
+        let emServerOpt =
+            match config.Email with
+            | Some emCfg -> Some (startEmailServer emCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -760,6 +781,7 @@ This file stores important information that persists across sessions.
         slServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         fsServerOpt |> Option.iter (fun s -> s.Stop())
         dtServerOpt |> Option.iter (fun s -> s.Stop())
+        emServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -824,6 +846,12 @@ This file stores important information that persists across sessions.
         let dtServerOpt =
             match config.DingTalk with
             | Some dtCfg -> Some (startDingTalkServer dtCfg)
+            | None -> None
+
+        // Email: start if configured
+        let emServerOpt =
+            match config.Email with
+            | Some emCfg -> Some (startEmailServer emCfg)
             | None -> None
 
         // Inter-agent: start if configured

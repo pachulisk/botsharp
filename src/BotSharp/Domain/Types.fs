@@ -794,6 +794,7 @@ type BotSharpConfig = {
     Slack                  : SlackChannelConfig option        // None = Slack disabled
     Feishu                 : FeishuChannelConfig option       // None = Feishu/Lark disabled
     DingTalk               : DingTalkChannelConfig option     // None = DingTalk disabled
+    Email                  : EmailChannelConfig option        // None = Email disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -823,6 +824,19 @@ and DingTalkChannelConfig = {
     ClientSecret : string
     AllowFrom    : AllowList
     WebhookPort  : int
+}
+
+and EmailChannelConfig = {
+    ImapHost    : string
+    ImapPort    : int
+    ImapUseSsl  : bool
+    SmtpHost    : string
+    SmtpPort    : int
+    SmtpUseTls  : bool
+    Username    : string
+    Password    : string
+    PollSeconds : int
+    AllowFrom   : AllowList
 }
 
 and InterAgentChannelConfig = {
@@ -903,6 +917,7 @@ module BotSharpConfig =
         Slack              = None
         Feishu             = None
         DingTalk           = None
+        Email              = None
         InterAgent         = None
         FallbackModels     = []
     }
