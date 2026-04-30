@@ -22,6 +22,8 @@ type RuleAction =
     | InjectPrompt of text: string
     | SkipTool of toolName: string
     | StripReasoning of reason: string
+    | AllowFallback of reason: string
+    | BlockFallback of reason: string
 
 type RuleEngine = {
     Env : ClipsEnv
@@ -83,6 +85,12 @@ let private builtinRules = """
   (slot to-provider (type STRING))
   (slot from-thinking-style (type STRING))
   (slot to-thinking-style (type STRING)))
+
+;; LLM error that may trigger a fallback to another provider.
+(deftemplate llm-error
+  (slot provider (type STRING))
+  (slot error-kind (type STRING))
+  (slot error-message (type STRING)))
 
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
@@ -271,6 +279,103 @@ let private builtinRules = """
   (assert (action (type "keep-reasoning")
                   (reason (str-cat "Same provider " ?p " -> " ?p ": keep reasoning_content"))
                   (tool ""))))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Fallback eligibility rules
+;;
+;; Determines whether a given LLM error should trigger a provider
+;; fallback. Errors that would affect ALL providers the same way
+;; (e.g. context too long) should NOT trigger fallback.
+;;
+;; Action type "allow-fallback": the error is eligible for fallback.
+;; Action type "block-fallback": the error is NOT eligible (with reason).
+;; If neither fires, default behavior is to allow fallback.
+;; ═══════════════════════════════════════════════════════════════
+
+;; ContextTooLong: same messages will fail on any provider → block.
+(defrule fallback-block-context-too-long
+  (declare (salience 10))
+  (llm-error (error-kind "ContextTooLong"))
+  (not (action (type "block-fallback")))
+  =>
+  (assert (action (type "block-fallback")
+                  (reason "Context too long - all providers will fail with the same messages")
+                  (tool ""))))
+
+;; EmptyResponse: usually misconfigured endpoint → block.
+;; Switching provider won't help if base_url is wrong.
+(defrule fallback-block-empty-response
+  (declare (salience 10))
+  (llm-error (error-kind "EmptyResponse"))
+  (not (action (type "block-fallback")))
+  =>
+  (assert (action (type "block-fallback")
+                  (reason "Empty response - likely misconfigured endpoint, fallback unlikely to help")
+                  (tool ""))))
+
+;; RateLimited: another provider has separate quota → allow.
+(defrule fallback-allow-rate-limited
+  (llm-error (error-kind "RateLimited"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Rate limited - fallback provider has separate quota")
+                  (tool ""))))
+
+;; QuotaExceeded: billing limit on this provider only → allow.
+(defrule fallback-allow-quota-exceeded
+  (llm-error (error-kind "QuotaExceeded"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Quota exceeded - fallback provider has separate billing")
+                  (tool ""))))
+
+;; ServerError: transient on this provider → allow.
+(defrule fallback-allow-server-error
+  (llm-error (error-kind "ServerError"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Server error - fallback provider may be healthy")
+                  (tool ""))))
+
+;; Timeout: this provider is slow/down → allow.
+(defrule fallback-allow-timeout
+  (llm-error (error-kind "Timeout"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Timeout - fallback provider may respond faster")
+                  (tool ""))))
+
+;; ModelNotFound: this provider doesn't have the model → allow.
+(defrule fallback-allow-model-not-found
+  (llm-error (error-kind "ModelNotFound"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Model not found - fallback provider may support it")
+                  (tool ""))))
+
+;; ConnectionFailed: auth issue on this provider → allow (other has own key).
+(defrule fallback-allow-connection-failed
+  (llm-error (error-kind "ConnectionFailed"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Connection failed - fallback provider has separate credentials")
+                  (tool ""))))
+
+;; MalformedResponse: request format issue → allow cautiously.
+;; Different providers may accept different formats.
+(defrule fallback-allow-malformed-response
+  (llm-error (error-kind "MalformedResponse"))
+  (not (action (type "allow-fallback")))
+  =>
+  (assert (action (type "allow-fallback")
+                  (reason "Malformed response - fallback provider may handle the format differently")
+                  (tool ""))))
 """
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -420,6 +525,8 @@ let evaluate (engine: RuleEngine) : RuleAction list =
         | "skip-tool"        -> Some (SkipTool tool)
         | "strip-reasoning"  -> Some (StripReasoning reason)
         | "keep-reasoning"   -> None   // explicitly no action needed
+        | "allow-fallback"   -> Some (AllowFallback reason)
+        | "block-fallback"   -> Some (BlockFallback reason)
         | _                -> None)
 
 /// Check if reasoning_content should be stripped for a provider fallback.
@@ -427,6 +534,31 @@ let evaluate (engine: RuleEngine) : RuleAction list =
 let shouldStripReasoning (engine: RuleEngine) : bool =
     let actions = evaluate engine
     actions |> List.exists (function StripReasoning _ -> true | _ -> false)
+
+/// Assert an LLM error fact for fallback eligibility evaluation.
+let assertLlmError
+    (engine       : RuleEngine)
+    (providerId   : string)
+    (errorKind    : string)
+    (errorMessage : string)
+    : unit =
+    let factStr =
+        sprintf "(llm-error (provider \"%s\") (error-kind \"%s\") (error-message \"%s\"))"
+            (escapeClips providerId) (escapeClips errorKind) (escapeClips errorMessage)
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert llm-error failed: %s" msg
+
+/// Check whether a fallback should be attempted for the given error.
+/// Returns true unless a BlockFallback rule fires.
+/// Default (no rules matched): allow fallback.
+let shouldFallback (engine: RuleEngine) : bool =
+    let actions = evaluate engine
+    let blocked = actions |> List.exists (function BlockFallback _ -> true | _ -> false)
+    if blocked then
+        let reason = actions |> List.tryPick (function BlockFallback r -> Some r | _ -> None) |> Option.defaultValue ""
+        eprintfn "[RuleEngine] Fallback blocked: %s" reason
+    not blocked
 
 // ── Turn management ──────────────────────────────────────────────────────
 

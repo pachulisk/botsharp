@@ -689,10 +689,38 @@ let private shouldStripForFallback
         BotSharp.Infrastructure.Rules.RuleEngine.assertProviderFallback engine fromId toId fromStyle toStyle
         BotSharp.Infrastructure.Rules.RuleEngine.shouldStripReasoning engine
 
+/// Convert LlmErrorKind to its CLIPS string representation.
+let private errorKindToString (kind: LlmErrorKind) : string =
+    match kind with
+    | RateLimited _       -> "RateLimited"
+    | QuotaExceeded       -> "QuotaExceeded"
+    | ServerError _       -> "ServerError"
+    | Timeout _           -> "Timeout"
+    | ConnectionFailed _  -> "ConnectionFailed"
+    | ModelNotFound _     -> "ModelNotFound"
+    | ContextTooLong      -> "ContextTooLong"
+    | MalformedResponse _ -> "MalformedResponse"
+    | EmptyResponse _     -> "EmptyResponse"
+
+/// Check with CLIPS whether fallback should be attempted for this error.
+/// Returns true (allow fallback) when no rule engine is available.
+let private shouldAttemptFallback
+    (ruleEngine : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
+    (providerId : string)
+    (err        : LlmError)
+    : bool =
+    match ruleEngine with
+    | None -> true   // no rule engine: allow all fallbacks (safe default)
+    | Some engine ->
+        BotSharp.Infrastructure.Rules.RuleEngine.assertLlmError
+            engine providerId (errorKindToString err.Kind) err.RawMessage
+        BotSharp.Infrastructure.Rules.RuleEngine.shouldFallback engine
+
 /// Try the primary provider, then fallback providers in order.
 /// Each provider gets its full retry budget before moving to the next.
-/// CLIPS rules decide whether reasoning_content should be stripped for each
-/// fallback — not hardcoded. Different providers may have incompatible formats.
+/// CLIPS rules decide:
+///   1. Whether fallback should be attempted at all (based on error kind)
+///   2. Whether reasoning_content should be stripped (based on provider compatibility)
 let chatWithRetry
     (primary    : LLMProvider)
     (fallbacks  : LLMProvider list)
@@ -706,27 +734,31 @@ let chatWithRetry
         match result with
         | Ok _ -> return result
         | Error primaryErr ->
-            let rec tryFallbacks remaining =
-                async {
-                    match remaining with
-                    | [] -> return Error primaryErr
-                    | fb :: rest ->
-                        let primaryId = (primary : LLMProvider).Id
-                        let fbId = (fb : LLMProvider).Id
-                        eprintfn "[Fallback] Primary provider '%s' failed, trying '%s'" primaryId fbId
-                        let msgs =
-                            if shouldStripForFallback ruleEngine primaryId fbId then
-                                eprintfn "[Fallback] Stripping reasoning_content (CLIPS: providers incompatible)"
-                                stripReasoningContent messages
-                            else
-                                messages
-                        let! fbResult = chatWithRetrySingle fb settings msgs tools
-                        match fbResult with
-                        | Ok _ -> return fbResult
-                        | Error _ -> return! tryFallbacks rest
-                }
-            if fallbacks.IsEmpty then return result
-            else return! tryFallbacks fallbacks
+            // CLIPS decides whether this error type is eligible for fallback
+            if fallbacks.IsEmpty || not (shouldAttemptFallback ruleEngine (primary : LLMProvider).Id primaryErr) then
+                return result
+            else
+                let rec tryFallbacks remaining =
+                    async {
+                        match remaining with
+                        | [] -> return Error primaryErr
+                        | fb :: rest ->
+                            let primaryId = (primary : LLMProvider).Id
+                            let fbId = (fb : LLMProvider).Id
+                            eprintfn "[Fallback] Primary provider '%s' failed, trying '%s'" primaryId fbId
+                            // CLIPS decides whether reasoning_content should be stripped
+                            let msgs =
+                                if shouldStripForFallback ruleEngine primaryId fbId then
+                                    eprintfn "[Fallback] Stripping reasoning_content (CLIPS: providers incompatible)"
+                                    stripReasoningContent messages
+                                else
+                                    messages
+                            let! fbResult = chatWithRetrySingle fb settings msgs tools
+                            match fbResult with
+                            | Ok _ -> return fbResult
+                            | Error _ -> return! tryFallbacks rest
+                    }
+                return! tryFallbacks fallbacks
     }
 
 // ═══════════════════════════════════════════════════════════════════════════
