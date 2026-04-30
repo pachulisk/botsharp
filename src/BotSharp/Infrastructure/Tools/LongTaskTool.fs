@@ -125,8 +125,10 @@ let private runStep
     }
 
 /// Execute the long task: loop through steps until complete or max_steps.
+/// Rule engine (if available) monitors step patterns and can abort early.
 let private executeLongTask
     (runSubagentStep : RunSubagentStep)
+    (ruleEngine      : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
     (goal            : string)
     (maxSteps        : int)
     : Async<ToolResult> =
@@ -141,24 +143,43 @@ let private executeLongTask
             let! stepResult = runStep runSubagentStep goal step handoff
             match stepResult with
             | Result.Error e ->
+                // Assert step failure into rule engine
+                ruleEngine |> Option.iter (fun eng ->
+                    BotSharp.Infrastructure.Rules.RuleEngine.assertLongTaskStep eng step "none" 0 "error")
                 if handoff <> "" then
                     finalResult <- $"Long task failed at step {step + 1}/{maxSteps}. Last progress:\n{handoff}"
                 else
                     finalResult <- $"Long task failed at step {step + 1}/{maxSteps}."
                 isDone <- true
             | Result.Ok (signalType, payload, content) ->
-                match signalType with
-                | Some "complete" ->
-                    eprintfn "[long_task] Completed at step %d" (step + 1)
-                    finalResult <- payload
-                    isDone <- true
-                | Some "handoff" ->
-                    eprintfn "[long_task] Handoff at step %d: %s" (step + 1) (if payload.Length > 100 then payload.[..99] + "..." else payload)
-                    handoff <- payload
-                | _ ->
-                    // No signal called — extract progress from final content
-                    eprintfn "[long_task] Step %d auto-extract (no signal called)" (step + 1)
-                    handoff <- content
+                let signal, newHandoff =
+                    match signalType with
+                    | Some "complete" ->
+                        eprintfn "[long_task] Completed at step %d" (step + 1)
+                        finalResult <- payload
+                        isDone <- true
+                        "complete", payload
+                    | Some "handoff" ->
+                        eprintfn "[long_task] Handoff at step %d: %s" (step + 1) (if payload.Length > 100 then payload.[..99] + "..." else payload)
+                        handoff <- payload
+                        "handoff", payload
+                    | _ ->
+                        eprintfn "[long_task] Step %d auto-extract (no signal called)" (step + 1)
+                        handoff <- content
+                        "none", content
+                // Assert step into rule engine and check for early abort
+                ruleEngine |> Option.iter (fun eng ->
+                    BotSharp.Infrastructure.Rules.RuleEngine.assertLongTaskStep eng step signal newHandoff.Length "ok"
+                    let actions = BotSharp.Infrastructure.Rules.RuleEngine.evaluate eng
+                    match actions |> List.tryPick (function BotSharp.Infrastructure.Rules.RuleEngine.StopLoop r -> Some r | _ -> None) with
+                    | Some reason ->
+                        eprintfn "[RuleEngine] %s" reason
+                        if handoff <> "" then
+                            finalResult <- $"{reason}\nLast progress:\n{handoff}"
+                        else
+                            finalResult <- reason
+                        isDone <- true
+                    | None -> ())
                 step <- step + 1
 
         if not isDone then
@@ -182,6 +203,7 @@ let longTaskSpec : ToolSpec = {
 /// Execute the long_task tool. `runSubagentStep` is provided by SubagentManager.
 let executeLongTaskTool
     (runSubagentStep : RunSubagentStep)
+    (ruleEngine      : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
     (args            : Map<string, JsonElement>)
     : Async<ToolResult> =
     async {
@@ -193,10 +215,12 @@ let executeLongTaskTool
                 |> Option.defaultValue 20
                 |> max 1
                 |> min 100
-            return! executeLongTask runSubagentStep goal maxSteps
+            return! executeLongTask runSubagentStep ruleEngine goal maxSteps
     }
 
 /// All long_task tools as a (spec, execute) pair.
-let allTools (runSubagentStep: RunSubagentStep)
+let allTools
+    (runSubagentStep : RunSubagentStep)
+    (ruleEngine      : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
     : (ToolSpec * (Map<string, JsonElement> -> Async<ToolResult>)) list =
-    [ longTaskSpec, executeLongTaskTool runSubagentStep ]
+    [ longTaskSpec, executeLongTaskTool runSubagentStep ruleEngine ]

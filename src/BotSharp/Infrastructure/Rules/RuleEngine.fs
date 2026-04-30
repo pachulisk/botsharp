@@ -68,6 +68,12 @@ let private builtinRules = """
   (slot severity (type STRING))
   (slot message (type STRING)))
 
+(deftemplate long-task-step
+  (slot step (type INTEGER))
+  (slot signal (type STRING))
+  (slot handoff-length (type INTEGER))
+  (slot status (type STRING)))
+
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
 ;; ═══════════════════════════════════════════════════════════════
@@ -154,6 +160,44 @@ let private builtinRules = """
   (assert (action (type "stop-loop")
                   (reason ?m)
                   (tool ""))))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Long-task step rules
+;; ═══════════════════════════════════════════════════════════════
+
+;; 3 consecutive steps failed — abort long task.
+(defrule long-task-consecutive-failures
+  (long-task-step (step ?s1) (status "error"))
+  (long-task-step (step ?s2&:(= ?s2 (+ ?s1 1))) (status "error"))
+  (long-task-step (step ?s3&:(= ?s3 (+ ?s2 1))) (status "error"))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason "Long task: 3 consecutive steps failed")
+                  (tool "long_task"))))
+
+;; 3 consecutive steps with no signal (no handoff/complete called) — stalled.
+(defrule long-task-no-signal-stall
+  (long-task-step (step ?s1) (signal "none"))
+  (long-task-step (step ?s2&:(= ?s2 (+ ?s1 1))) (signal "none"))
+  (long-task-step (step ?s3&:(= ?s3 (+ ?s2 1))) (signal "none"))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason "Long task: 3 consecutive steps produced no handoff/complete signal — subagent may be stuck")
+                  (tool "long_task"))))
+
+;; Handoff content shrinking: progress getting shorter each step (losing context).
+;; Step N has >0 chars, step N+1 has less than 1/3 of N, step N+2 has less than 1/2 of N+1.
+(defrule long-task-shrinking-handoff
+  (long-task-step (step ?s1) (signal "handoff") (handoff-length ?h1&:(> ?h1 30)))
+  (long-task-step (step ?s2&:(= ?s2 (+ ?s1 1))) (signal "handoff") (handoff-length ?h2&:(< ?h2 (integer (/ ?h1 3)))))
+  (long-task-step (step ?s3&:(= ?s3 (+ ?s2 1))) (signal "handoff") (handoff-length ?h3&:(< ?h3 (integer (/ ?h2 2)))))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason "Long task: handoff summaries shrinking rapidly - subagent losing track of progress")
+                  (tool "long_task"))))
 """
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -257,6 +301,21 @@ let assertConfigIssue
     match assertFact engine.Env factStr with
     | Ok ()     -> ()
     | Error msg -> eprintfn "[RuleEngine] Assert config-issue failed: %s" msg
+
+/// Assert a long-task step fact (used by LongTaskTool orchestrator).
+let assertLongTaskStep
+    (engine        : RuleEngine)
+    (step          : int)
+    (signal        : string)   // "handoff" | "complete" | "none"
+    (handoffLength : int)
+    (status        : string)   // "ok" | "error"
+    : unit =
+    let factStr =
+        sprintf "(long-task-step (step %d) (signal \"%s\") (handoff-length %d) (status \"%s\"))"
+            step (escapeClips signal) handoffLength (escapeClips status)
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert long-task-step failed: %s" msg
 
 // ── Evaluation ───────────────────────────────────────────────────────────
 

@@ -418,16 +418,6 @@ This file stores important information that persists across sessions.
     let spawnToolPair =
         BotSharp.Infrastructure.Tools.SpawnTool.allTools subagentMgr
 
-    let longTaskToolPair =
-        BotSharp.Infrastructure.Tools.LongTaskTool.allTools
-            (fun extraToolPairs sysPrompt userMsg -> subagentMgr.RunStep(extraToolPairs, sysPrompt, userMsg))
-
-    let allToolsMap : Map<ToolName, ToolSpec * (Map<string, System.Text.Json.JsonElement> -> Async<ToolResult>)> =
-        baseToolMap
-        |> addToolPairs msgToolPair
-        |> addToolPairs spawnToolPair
-        |> addToolPairs longTaskToolPair
-
     // ── CLIPS rule engine (graceful fallback if native lib not available) ────
     let ruleEngine =
         try Some (BotSharp.Infrastructure.Rules.RuleEngine.create config.WorkspacePath)
@@ -449,6 +439,17 @@ This file stores important information that persists across sessions.
             | _ -> ()
         BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
     | None -> ()
+
+    let longTaskToolPair =
+        BotSharp.Infrastructure.Tools.LongTaskTool.allTools
+            (fun extraToolPairs sysPrompt userMsg -> subagentMgr.RunStep(extraToolPairs, sysPrompt, userMsg))
+            ruleEngine
+
+    let allToolsMap : Map<ToolName, ToolSpec * (Map<string, System.Text.Json.JsonElement> -> Async<ToolResult>)> =
+        baseToolMap
+        |> addToolPairs msgToolPair
+        |> addToolPairs spawnToolPair
+        |> addToolPairs longTaskToolPair
 
     // ── Build agent dependencies ──────────────────────────────────────────────
     let deps : AgentDependencies = {
