@@ -40,6 +40,7 @@ let private stubDeps : AgentDependencies = {
     LastTokenUsage    = ref None
     CurrentIteration  = ref 0
     RuleEngine        = None
+    FallbackProviders = []
 }
 
 let private noopComplete : OnSubagentComplete = fun _ -> async { return () }

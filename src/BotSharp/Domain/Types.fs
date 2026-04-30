@@ -786,6 +786,7 @@ type BotSharpConfig = {
     ApiTimeoutSeconds      : int                       // per-request timeout for API server (Python: api.timeout; default 120)
     ApiHost                : string                    // listen address for API server (Python: api.host; default "localhost")
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
+    FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
 
 and InterAgentChannelConfig = {
@@ -860,6 +861,7 @@ module BotSharpConfig =
         Telegram           = None
         Ws                 = None
         InterAgent         = None
+        FallbackModels     = []
     }
 
 // ═══════════════════════════════════════════════════════════════════════════

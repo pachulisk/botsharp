@@ -61,7 +61,8 @@ let private mkDeps (reply: string) : AgentDependencies =
       Hook              = AgentHook.none
       LastTokenUsage    = ref None
       CurrentIteration  = ref 0
-      RuleEngine        = None }
+      RuleEngine        = None
+      FallbackProviders = [] }
 
 /// AgentDependencies backed by a provider that always returns an LLM error.
 let private mkErrorDeps () : AgentDependencies =

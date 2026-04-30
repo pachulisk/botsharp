@@ -34,6 +34,7 @@ let private stubDeps : AgentDependencies = {
     LastTokenUsage    = ref None
     CurrentIteration  = ref 0
     RuleEngine        = None
+    FallbackProviders = []
 }
 
 /// No-op completion callback for tests.

@@ -28,6 +28,7 @@ type AgentDependencies = {
     LastTokenUsage    : TokenUsage option ref      // written after each LLM call; read by my tool
     CurrentIteration  : int ref                    // written at start of each AwaitingLLM step; read by my tool
     RuleEngine        : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option
+    FallbackProviders : LLMProvider list           // ordered fallback providers when primary fails
 }
 
 let private liftStorage (m: Async<Result<'a, StorageError>>) : AsyncResult<'a, AgentError> =
@@ -625,7 +626,8 @@ let enforceRoleAlternation (messages: Message list) : Message list =
 
 /// Invoke provider.Chat with retry according to provider.RetryPolicy.
 /// Mirrors Python LLMProvider.chat_with_retry.
-let chatWithRetry
+/// Try a single provider with its retry policy.
+let private chatWithRetrySingle
     (provider : LLMProvider)
     (settings : GenerationSettings)
     (messages : Message list)
@@ -635,15 +637,12 @@ let chatWithRetry
         match provider.RetryPolicy.Mode with
         | FixedRetries (_, ds) -> ds |> List.map (fun d -> int d.TotalMilliseconds)
         | Persistent limit ->
-            // Exponential backoff capped at 30 s per step, enough slots to span the limit.
             [ for i in 0..9 -> min (1000 * (pown 2 i)) (min 30000 (int limit.TotalMilliseconds / 2)) ]
     let rec go remaining remainingDelays =
         async {
             let! result = provider.Chat settings messages tools
             match result, remaining, remainingDelays with
             | Error err, left, delay :: rest when LlmError.shouldRetry err && left > 0 ->
-                // Honour the Retry-After header for rate-limited responses;
-                // fall back to the scheduled backoff delay for other retryable errors.
                 let waitMs =
                     match err.Kind with
                     | RateLimited (Some after) -> max (int after.TotalMilliseconds) delay
@@ -653,6 +652,37 @@ let chatWithRetry
             | _ -> return result
         }
     go (List.length delays) delays
+
+/// Try the primary provider, then fallback providers in order.
+/// Each provider gets its full retry budget before moving to the next.
+let chatWithRetry
+    (primary   : LLMProvider)
+    (fallbacks : LLMProvider list)
+    (settings  : GenerationSettings)
+    (messages  : Message list)
+    (tools     : ToolSpec list)
+    : Async<Result<LLMResponse, LlmError>> =
+    async {
+        let! result = chatWithRetrySingle primary settings messages tools
+        match result with
+        | Ok _ -> return result
+        | Error primaryErr ->
+            let rec tryFallbacks remaining =
+                async {
+                    match remaining with
+                    | [] -> return Error primaryErr
+                    | fb :: rest ->
+                        let primaryId = (primary : LLMProvider).Id
+                        let fbId = (fb : LLMProvider).Id
+                        eprintfn "[Fallback] Primary provider '%s' failed, trying '%s'" primaryId fbId
+                        let! fbResult = chatWithRetrySingle fb settings messages tools
+                        match fbResult with
+                        | Ok _ -> return fbResult
+                        | Error _ -> return! tryFallbacks rest
+                }
+            if fallbacks.IsEmpty then return result
+            else return! tryFallbacks fallbacks
+    }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Main agent loop (state-machine driven)
@@ -733,7 +763,7 @@ let rec private iterate
                 match deps.StreamHook with
                 | NoStreaming ->
                     // Non-streaming: apply retry policy (mirrors Python chat_with_retry).
-                    liftLlm (chatWithRetry deps.Provider fullReq.Settings fullReq.Messages fullReq.Tools)
+                    liftLlm (chatWithRetry deps.Provider deps.FallbackProviders fullReq.Settings fullReq.Messages fullReq.Tools)
 
                 | StreamingHook (onDelta, onStreamEnd) ->
                     asyncResult {
@@ -864,7 +894,7 @@ let rec private iterate
                 // Mirrors Python runner._request_finalization_retry.
                 let retryMessages = trimmedMessages @ [ UserMessage (_FINALIZATION_PROMPT, []) ]
                 let retrySettings = fullReq.Settings  // same settings
-                let! retryResp = liftLlm (chatWithRetry deps.Provider retrySettings retryMessages [])
+                let! retryResp = liftLlm (chatWithRetry deps.Provider deps.FallbackProviders retrySettings retryMessages [])
                 match retryResp.Body with
                 | TextOnly text when text.Trim() <> "" ->
                     // Recovery succeeded — treat as a normal text response.
@@ -892,7 +922,7 @@ let rec private iterate
                 if text.Trim() = "" && emptyContentRetries < _MAX_EMPTY_RETRIES then
                     do! deps.Hook.AfterIteration hookCtx |> AsyncResult.ofAsync
                     let retryMessages = trimmedMessages @ [ UserMessage (_FINALIZATION_PROMPT, []) ]
-                    let! retryResp = liftLlm (chatWithRetry deps.Provider fullReq.Settings retryMessages [])
+                    let! retryResp = liftLlm (chatWithRetry deps.Provider deps.FallbackProviders fullReq.Settings retryMessages [])
                     let retryText = stripThink (match retryResp.Body with TextOnly t -> t | _ -> "")
                     if retryText.Trim() <> "" then
                         // Finalization retry recovered a non-blank response — proceed normally.

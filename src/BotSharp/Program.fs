@@ -292,6 +292,14 @@ This file stores important information that persists across sessions.
                           ProviderCode = None }
                   } }
 
+    // Resolve fallback providers from config.FallbackModels
+    let fallbackProviders =
+        config.FallbackModels
+        |> List.choose (fun model -> resolve httpClient model config)
+        |> List.filter (fun p -> p.Id <> provider.Id)
+    if not fallbackProviders.IsEmpty then
+        printfn "Fallback providers: %s" (fallbackProviders |> List.map (fun p -> $"{p.Id}:{p.DefaultModel}") |> String.concat " -> ")
+
     // ── Auto-detect context window when not configured ────────────────────────
     // When context_window_tokens = 0 (the default), look up the model name
     // in the registry table. This enables context-window trimming automatically
@@ -408,6 +416,7 @@ This file stores important information that persists across sessions.
         LastTokenUsage    = ref None   // subagents are ephemeral; actors override per session
         CurrentIteration  = ref 0
         RuleEngine        = None   // subagents don't need rule engine
+        FallbackProviders = fallbackProviders
     }
 
     let subagentMgr =
@@ -465,6 +474,7 @@ This file stores important information that persists across sessions.
         LastTokenUsage    = ref None   // overridden per session actor in createSessionActor
         CurrentIteration  = ref 0
         RuleEngine        = ruleEngine
+        FallbackProviders = fallbackProviders
     }
 
     // ── Wire up the system ────────────────────────────────────────────────────

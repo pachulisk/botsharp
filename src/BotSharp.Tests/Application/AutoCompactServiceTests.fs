@@ -38,7 +38,8 @@ let private mkDeps
       Hook              = AgentHook.none
       LastTokenUsage    = ref None
       CurrentIteration  = ref 0
-      RuleEngine        = None }
+      RuleEngine        = None
+      FallbackProviders = [] }
 
 [<Fact>]
 let ``AutoCompactService Start/Stop with ttl=0 does not crash`` () =

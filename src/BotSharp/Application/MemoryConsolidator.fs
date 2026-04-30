@@ -211,7 +211,7 @@ let private consolidateImpl
 
             let! response =
                 async {
-                    let! r = chatWithRetry deps.Provider request.Settings request.Messages request.Tools
+                    let! r = chatWithRetry deps.Provider deps.FallbackProviders request.Settings request.Messages request.Tools
                     return Result.mapError AgentLlmFailure r
                 }
 
