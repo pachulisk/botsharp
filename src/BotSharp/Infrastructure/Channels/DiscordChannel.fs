@@ -87,7 +87,7 @@ type DiscordServer(coordinator: AgentCoordinator, config: DiscordConfig) =
                     Channel            = ChannelId "discord"
                     Sender             = UserId senderId
                     Chat               = ChatId (string channelId)
-                    Input              = ChatMessage (content, [])
+                    Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput content
                     Metadata           = Map.ofList [ "message_id", string msg.Id ]
                     SessionKeyOverride = None
                 }

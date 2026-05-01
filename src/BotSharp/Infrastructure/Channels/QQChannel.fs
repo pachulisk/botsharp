@@ -129,7 +129,7 @@ type QQServer(coordinator: AgentCoordinator, config: QQConfig, httpClient: HttpC
                         Channel            = ChannelId "qq"
                         Sender             = UserId userId
                         Chat               = ChatId userId
-                        Input              = ChatMessage (content, [])
+                        Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput content
                         Metadata           = Map.ofList [ "message_id", msgId ]
                         SessionKeyOverride = None
                     }

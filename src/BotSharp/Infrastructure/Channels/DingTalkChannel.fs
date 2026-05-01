@@ -141,7 +141,7 @@ type DingTalkServer(coordinator: AgentCoordinator, config: DingTalkConfig, httpC
                         Channel            = ChannelId "dingtalk"
                         Sender             = UserId senderId
                         Chat               = ChatId chatId
-                        Input              = ChatMessage (text.Trim(), [])
+                        Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput (text.Trim())
                         Metadata           = Map.ofList [ "msg_type", msgType; "is_group", string isGroup ]
                         SessionKeyOverride = None
                     }

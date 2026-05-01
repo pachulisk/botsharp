@@ -114,7 +114,7 @@ type WhatsAppServer(coordinator: AgentCoordinator, config: WhatsAppConfig, httpC
                                         Channel            = ChannelId "whatsapp"
                                         Sender             = UserId fromPhone
                                         Chat               = ChatId fromPhone
-                                        Input              = ChatMessage (text.Trim(), [])
+                                        Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput (text.Trim())
                                         Metadata           = Map.ofList [ "message_id", msgId; "msg_type", msgType ]
                                         SessionKeyOverride = None
                                     }

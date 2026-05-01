@@ -59,7 +59,7 @@ type TelnetServer(coordinator: AgentCoordinator, config: TelnetConfig) =
                             Channel            = ChannelId "telnet"
                             Sender             = UserId endpoint
                             Chat               = ChatId sessionId
-                            Input              = ChatMessage (line.Trim(), [])
+                            Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput (line.Trim())
                             Metadata           = Map.empty
                             SessionKeyOverride = Some (SessionId sessionId)
                         }

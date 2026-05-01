@@ -200,7 +200,7 @@ type FeishuServer(coordinator: AgentCoordinator, config: FeishuConfig, httpClien
                                 Channel            = ChannelId "feishu"
                                 Sender             = UserId senderId
                                 Chat               = ChatId replyTo
-                                Input              = ChatMessage (text, [])
+                                Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput text
                                 Metadata           = Map.ofList [ "chat_type", chatType; "msg_type", msgType ]
                                 SessionKeyOverride = None
                             }

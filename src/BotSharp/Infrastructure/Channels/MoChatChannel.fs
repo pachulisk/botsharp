@@ -104,7 +104,7 @@ type MoChatServer(coordinator: AgentCoordinator, config: MoChatConfig, httpClien
                             Channel            = ChannelId "mochat"
                             Sender             = UserId senderId
                             Chat               = ChatId sessionId
-                            Input              = ChatMessage (text.Trim(), [])
+                            Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput (text.Trim())
                             Metadata           = Map.ofList [ "message_id", msgId; "msg_type", msgType ]
                             SessionKeyOverride = None
                         }

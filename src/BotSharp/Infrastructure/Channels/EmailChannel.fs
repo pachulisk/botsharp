@@ -115,7 +115,7 @@ type EmailServer(coordinator: AgentCoordinator, config: EmailConfig) =
                                 Channel            = ChannelId "email"
                                 Sender             = UserId fromAddr
                                 Chat               = ChatId fromAddr
-                                Input              = ChatMessage (body.Trim(), [])
+                                Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput (body.Trim())
                                 Metadata           = Map.ofList [ "subject", subject ]
                                 SessionKeyOverride = None
                             }

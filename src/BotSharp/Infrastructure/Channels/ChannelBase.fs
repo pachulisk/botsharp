@@ -21,3 +21,10 @@ type ChannelPort = {
 /// Delegates to AllowList.permits so channel adapters never see raw strings.
 let isAllowed (sender: UserId) (allowList: AllowList) : bool =
     AllowList.permits sender allowList
+
+/// Parse user input text into a UserInput (Command or ChatMessage).
+/// All channels should use this to enable slash commands (/new, /model, etc.).
+let parseInput (text: string) : UserInput =
+    match BotSharp.Infrastructure.Input.InputParser.parseUserInput text with
+    | Result.Ok v  -> v
+    | Result.Error _ -> ChatMessage (text, [])

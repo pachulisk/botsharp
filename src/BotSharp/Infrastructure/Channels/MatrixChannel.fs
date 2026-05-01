@@ -107,7 +107,7 @@ type MatrixServer(coordinator: AgentCoordinator, config: MatrixConfig, httpClien
                         Channel            = ChannelId "matrix"
                         Sender             = UserId sender
                         Chat               = ChatId roomId
-                        Input              = ChatMessage (body, [])
+                        Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput body
                         Metadata           = Map.ofList [ "msg_type", msgType ]
                         SessionKeyOverride = None
                     }

@@ -165,7 +165,7 @@ type SlackServer(coordinator: AgentCoordinator, config: SlackConfig, httpClient:
                 Channel            = ChannelId "slack"
                 Sender             = UserId senderId
                 Chat               = ChatId channelId
-                Input              = ChatMessage (cleanText, [])
+                Input              = BotSharp.Infrastructure.Channels.ChannelBase.parseInput cleanText
                 Metadata           = Map.ofList [ "thread_ts", (threadTs |> Option.defaultValue "") ]
                 SessionKeyOverride = sessionKey |> Option.map SessionId
             }
