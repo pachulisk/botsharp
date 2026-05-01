@@ -5,6 +5,7 @@ open System.IO
 open System.Net.Http
 open System.Text.Json
 open BotSharp.Domain.Types
+open BotSharp.Domain.Errors
 open BotSharp.Infrastructure.Config.ConfigLoader
 open BotSharp.Infrastructure.Providers.ProviderRegistry
 open BotSharp.Infrastructure.Storage.JsonlStore
@@ -339,26 +340,45 @@ This file stores important information that persists across sessions.
     let mutable routeRef : (InboundMessage -> Async<unit>) =
         fun _ -> async { return () }   // placeholder; replaced below
 
-    // Cron send callback — same mutable ref pattern as sendRef (defined below).
-    // Replaced once sendRef is wired up.
+    // Cron coordinator ref — set once coordinator is built (same mutable ref cycle-break pattern).
+    let mutable cronRouteRef : (InboundMessage -> Async<Result<AgentResult, AgentError>>) =
+        fun _ -> async { return Result.Ok (PlainResponse "") }
+    // Cron send ref — set once sendRef is wired up.
     let mutable cronSendRef : (OutboundMessage -> Async<unit>) =
         fun msg -> async { printfn "\n[cron] %s" msg.Content }
 
     let cronSvc =
         CronService(config.WorkspacePath, fun job ->
             async {
-                // Send the cron job's task text directly to the target channel.
-                // Unlike normal messages that go through the agent loop, cron reminders
-                // are delivered as-is — the job.Task IS the reminder text.
-                let outbound : OutboundMessage = {
-                    Channel     = job.Channel
-                    Chat        = job.Chat
-                    Content     = job.Task
-                    ReplyTo     = None
-                    Attachments = []
-                    Buttons     = []
+                // Port of nanobot on_cron_job (cli/commands.py:297-335):
+                // 1. Route the scheduled task through the agent loop
+                // 2. Send the agent's reply to the target channel
+                let reminderNote =
+                    $"[Scheduled Task] Timer finished.\n\nTask '{job.Label}' has been triggered.\nScheduled instruction: {job.Task}"
+                let inbound : InboundMessage = {
+                    Channel            = job.Channel
+                    Sender             = UserId "cron"
+                    Chat               = job.Chat
+                    Input              = ChatMessage (reminderNote, [])
+                    Metadata           = Map.ofList [ "source", "cron"; "job_id", (let (TaskId v) = job.Id in v) ]
+                    SessionKeyOverride = Some (SessionId $"cron:{let (TaskId v) = job.Id in v}")
                 }
-                do! cronSendRef outbound
+                let! result = cronRouteRef inbound
+                // Deliver the reply to the target channel
+                match result with
+                | Result.Ok (PlainResponse text) | Result.Ok (StreamedResponse text) when not (String.IsNullOrWhiteSpace text) ->
+                    let outbound : OutboundMessage = {
+                        Channel     = job.Channel
+                        Chat        = job.Chat
+                        Content     = text
+                        ReplyTo     = None
+                        Attachments = []
+                        Buttons     = []
+                    }
+                    do! cronSendRef outbound
+                | Result.Error e ->
+                    eprintfn "[Cron] Job '%s' failed: %A" (let (TaskId v) = job.Id in v) e
+                | _ -> ()
             })
 
     let cronToolPair =
@@ -501,6 +521,7 @@ This file stores important information that persists across sessions.
         let! _ = coordinator.Route msg
         return ()
     }
+    cronRouteRef <- fun msg -> coordinator.Route msg
     spawnRouteRef <- routeRef   // subagent announcements go through the same coordinator
 
     // ── API server (start function, shared by both modes) ─────────────────────
@@ -945,6 +966,7 @@ This file stores important information that persists across sessions.
                 if verbose then eprintfn "[message] -> %s:%s  %s"
                                             ch (let (ChatId c) = msg.Chat in c) msg.Content
         }
+        cronSendRef <- fun msg -> sendRef msg   // cron jobs deliver via same send pipeline
 
         // Banner
         printfn "BotSharp gateway — model: %s" config.DefaultModel
@@ -995,6 +1017,7 @@ This file stores important information that persists across sessions.
             else
                 do! port.Send msg
         }
+        cronSendRef <- fun msg -> sendRef msg
 
         let apiServerOpt =
             let effectiveApiPort =
