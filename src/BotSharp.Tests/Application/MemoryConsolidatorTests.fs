@@ -96,33 +96,33 @@ let private withTempDir (f: string -> unit) =
 let ``needsConsolidation returns false for empty snapshot`` () =
     let snap = snapWithMessages 0
     let config = { BotSharpConfig.defaults with MemoryWindowSize = 5 }
-    Assert.False(needsConsolidation snap config)
+    Assert.False(needsConsolidation snap config None None)
 
 [<Fact>]
 let ``needsConsolidation returns false when unconsolidated count is below window`` () =
     let snap = snapWithMessages 4  // window = 5
     let config = { BotSharpConfig.defaults with MemoryWindowSize = 5 }
-    Assert.False(needsConsolidation snap config)
+    Assert.False(needsConsolidation snap config None None)
 
 [<Fact>]
 let ``needsConsolidation returns true when unconsolidated count equals window`` () =
     let snap = snapWithMessages 5
     let config = { BotSharpConfig.defaults with MemoryWindowSize = 5 }
-    Assert.True(needsConsolidation snap config)
+    Assert.True(needsConsolidation snap config None None)
 
 [<Fact>]
 let ``needsConsolidation returns true when unconsolidated count exceeds window`` () =
     let snap = snapWithMessages 10
     let config = { BotSharpConfig.defaults with MemoryWindowSize = 5 }
-    Assert.True(needsConsolidation snap config)
+    Assert.True(needsConsolidation snap config None None)
 
 [<Fact>]
 let ``needsConsolidation respects MemoryWindowSize configuration`` () =
     let snap = snapWithMessages 3
     let config1 = { BotSharpConfig.defaults with MemoryWindowSize = 5 }
     let config2 = { BotSharpConfig.defaults with MemoryWindowSize = 3 }
-    Assert.False(needsConsolidation snap config1)
-    Assert.True(needsConsolidation snap config2)
+    Assert.False(needsConsolidation snap config1 None None)
+    Assert.True(needsConsolidation snap config2 None None)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // consolidate — skipping when below threshold

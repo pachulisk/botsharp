@@ -162,11 +162,31 @@ let private parseConsolidationResponse (raw: string) (currentMemory: string) : s
 
 // ── Public API ────────────────────────────────────────────────────────────
 
-/// Check if consolidation is needed based on unconsolidated message count.
-let needsConsolidation (snap: SessionSnapshot) (config: BotSharpConfig) : bool =
-    let unconsolidatedCount =
-        SessionSnapshot.messageCount snap - SessionSnapshot.lastConsolidated snap
-    unconsolidatedCount >= config.MemoryWindowSize
+/// Check if consolidation is needed.
+/// CLIPS rules decide: needs-consolidation-by-messages OR needs-consolidation-by-tokens.
+/// Falls back to message count threshold when CLIPS is unavailable.
+let needsConsolidation
+    (snap        : SessionSnapshot)
+    (config      : BotSharpConfig)
+    (tracker     : TokenTracker option)
+    (ruleEngine  : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
+    : bool =
+    let unconsolidatedCount = SessionSnapshot.messageCount snap - SessionSnapshot.lastConsolidated snap
+    let tokenUsagePct =
+        match tracker with
+        | Some t -> 100 - TokenTracker.contextRemainingPercent t
+        | None -> 0
+    match ruleEngine with
+    | Some engine ->
+        BotSharp.Infrastructure.Rules.RuleEngine.assertConsolidationCheck
+            engine unconsolidatedCount config.MemoryWindowSize tokenUsagePct
+        let result = BotSharp.Infrastructure.Rules.RuleEngine.shouldConsolidate engine
+        BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
+        result
+    | None ->
+        // No CLIPS: dual trigger with inline thresholds
+        unconsolidatedCount >= config.MemoryWindowSize
+        || (match tracker with Some t -> TokenTracker.shouldCompactByTokens t | None -> false)
 
 /// Internal: run consolidation with optional force flag.
 /// force = true: consolidate ALL messages regardless of MemoryWindowSize threshold.
@@ -178,7 +198,7 @@ let private consolidateImpl
     : AsyncResult<ConsolidationResult, AgentError> =
     asyncResult {
         let hasMessages = SessionSnapshot.messageCount snap > SessionSnapshot.lastConsolidated snap
-        if not force && not (needsConsolidation snap deps.Config) then
+        if not force && not (needsConsolidation snap deps.Config deps.TokenTracker.Value deps.RuleEngine) then
             return ConsolidationSkipped
         elif not hasMessages then
             return ConsolidationSkipped

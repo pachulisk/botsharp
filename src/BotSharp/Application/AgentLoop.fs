@@ -443,16 +443,21 @@ let messageTokens (msg: Message) : int =
 /// Keeps system messages; drops oldest non-system messages first.
 /// Returns messages unchanged if ContextWindowTokens = 0 and no contextBlockLimit.
 /// contextBlockLimit (when Some) directly overrides the computed budget (mirrors Python context_block_limit).
-let trimToContextWindow (contextWindowTokens: int) (maxTokens: int) (contextBlockLimit: int option) (messages: Message list) : Message list =
+/// trackerEstimate: TokenTracker's current usage estimate (optional).
+/// When available, uses max(localEstimate, trackerEstimate) for trimming decisions
+/// to catch cases where local byte-based estimation underestimates.
+let trimToContextWindow (contextWindowTokens: int) (maxTokens: int) (contextBlockLimit: int option) (trackerEstimate: int option) (messages: Message list) : Message list =
     let budget =
         match contextBlockLimit with
-        | Some limit -> limit   // explicit override takes precedence (Python parity)
+        | Some limit -> limit
         | None ->
-            if contextWindowTokens <= 0 then 0   // 0 = no trimming
+            if contextWindowTokens <= 0 then 0
             else contextWindowTokens - maxTokens - _SNIP_BUFFER
     if budget <= 0 then messages
         else
-            let totalEst = messages |> List.sumBy messageTokens
+            let localEst = messages |> List.sumBy messageTokens
+            // Hybrid: take the larger of local estimate and tracker estimate
+            let totalEst = match trackerEstimate with Some te -> max localEst te | None -> localEst
             if totalEst <= budget then messages
             else
                 let system    = messages |> List.filter (fun m -> match m with SystemMessage _ -> true | _ -> false)
@@ -860,6 +865,7 @@ let rec private iterate
                 |> microcompact
                 |> applyToolResultBudget deps.Config.MaxToolResultChars
                 |> trimToContextWindow deps.Config.ContextWindowTokens deps.Config.MaxTokens deps.Config.ContextBlockLimit
+                    (deps.TokenTracker.Value |> Option.map TokenTracker.currentUsageEstimate)
                 |> dropOrphanToolResults
                 |> backfillMissingToolResults
                 |> enforceRoleAlternation   // merge consecutive same-role messages; drop trailing assistant

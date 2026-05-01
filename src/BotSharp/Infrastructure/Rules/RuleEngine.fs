@@ -24,6 +24,7 @@ type RuleAction =
     | StripReasoning of reason: string
     | AllowFallback of reason: string
     | BlockFallback of reason: string
+    | ConsolidateNow of reason: string
 
 type RuleEngine = {
     Env : ClipsEnv
@@ -107,6 +108,31 @@ let private builtinRules = """
 ;; Session clear request — used by /clear to check safety.
 (deftemplate session-clear-request
   (slot unconsolidated-count (type INTEGER)))
+
+;; Consolidation check — asserted by needsConsolidation to let CLIPS decide.
+(deftemplate consolidation-check
+  (slot unconsolidated (type INTEGER))
+  (slot memory-window (type INTEGER))
+  (slot token-usage-pct (type INTEGER)))
+
+;; Consolidation needed: unconsolidated messages exceed memory window.
+(defrule needs-consolidation-by-messages
+  (consolidation-check (unconsolidated ?u) (memory-window ?w&:(> ?w 0)))
+  (test (>= ?u ?w))
+  (not (action (type "consolidate-now")))
+  =>
+  (assert (action (type "consolidate-now")
+                  (reason (str-cat "Unconsolidated messages (" ?u ") >= memory window (" ?w ")"))
+                  (tool ""))))
+
+;; Consolidation needed: token usage exceeds 80% of context window.
+(defrule needs-consolidation-by-tokens
+  (consolidation-check (token-usage-pct ?p&:(>= ?p 80)))
+  (not (action (type "consolidate-now")))
+  =>
+  (assert (action (type "consolidate-now")
+                  (reason (str-cat "Token usage at " ?p "% of context window"))
+                  (tool ""))))
 
 ;; Session message truncation event — tracks when max_messages cuts history.
 (deftemplate session-truncated
@@ -647,6 +673,7 @@ let evaluate (engine: RuleEngine) : RuleAction list =
         | "keep-reasoning"   -> None   // explicitly no action needed
         | "allow-fallback"   -> Some (AllowFallback reason)
         | "block-fallback"   -> Some (BlockFallback reason)
+        | "consolidate-now"  -> Some (ConsolidateNow reason)
         | _                -> None)
 
 /// Assert a session-truncated fact when max_messages cuts history.
@@ -695,6 +722,25 @@ let assertSessionClearRequest (engine: RuleEngine) (unconsolidatedCount: int) : 
 let shouldConsolidateBeforeClear (engine: RuleEngine) : bool =
     let actions = evaluate engine
     actions |> List.exists (function InjectPrompt r -> r.Contains("unconsolidated") | _ -> false)
+
+/// Assert a consolidation-check fact for CLIPS to evaluate.
+let assertConsolidationCheck
+    (engine          : RuleEngine)
+    (unconsolidated  : int)
+    (memoryWindow    : int)
+    (tokenUsagePct   : int)
+    : unit =
+    let factStr =
+        sprintf "(consolidation-check (unconsolidated %d) (memory-window %d) (token-usage-pct %d))"
+            unconsolidated memoryWindow tokenUsagePct
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert consolidation-check failed: %s" msg
+
+/// Check if CLIPS says consolidation is needed.
+let shouldConsolidate (engine: RuleEngine) : bool =
+    let actions = evaluate engine
+    actions |> List.exists (function ConsolidateNow _ -> true | _ -> false)
 
 /// Assert an LLM error fact for fallback eligibility evaluation.
 let assertLlmError

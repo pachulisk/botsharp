@@ -952,14 +952,14 @@ let ``tool result under MaxToolResultChars is not truncated`` () =
 [<Fact>]
 let ``trimToContextWindow passes messages unchanged when contextWindowTokens = 0`` () =
     let msgs = [ SystemMessage "sys"; UserMessage ("hello", []); AssistantMessage ("hi", None) ]
-    let result = trimToContextWindow 0 512 None msgs
+    let result = trimToContextWindow 0 512 None None msgs
     Assert.Equal<Message list>(msgs, result)
 
 [<Fact>]
 let ``trimToContextWindow passes messages unchanged when they fit within budget`` () =
     // Short messages — well under any reasonable budget
     let msgs = [ UserMessage ("hi", []); AssistantMessage ("hello", None) ]
-    let result = trimToContextWindow 128_000 512 None msgs
+    let result = trimToContextWindow 128_000 512 None None msgs
     Assert.Equal<Message list>(msgs, result)
 
 [<Fact>]
@@ -969,7 +969,7 @@ let ``trimToContextWindow keeps system messages when trimming`` () =
     let users  = [ for i in 1..20 -> UserMessage (String.replicate 200 "x", []) ]
     let assts  = [ for i in 1..20 -> AssistantMessage (String.replicate 200 "x", None) ]
     let msgs   = sys :: List.concat [ users; assts ]
-    let result = trimToContextWindow 2048 256 None msgs
+    let result = trimToContextWindow 2048 256 None None msgs
     Assert.Contains(sys, result)
 
 [<Fact>]
@@ -979,7 +979,7 @@ let ``trimToContextWindow result starts with user message after trimming`` () =
         [ for i in 1..30 ->
             if i % 2 = 1 then UserMessage (String.replicate 100 "u", [])
             else AssistantMessage (String.replicate 100 "a", None) ]
-    let result = trimToContextWindow 1024 128 None msgs
+    let result = trimToContextWindow 1024 128 None None msgs
     if result.IsEmpty then ()  // empty is acceptable if all non-system is too large
     else
         let nonSystem = result |> List.filter (fun m -> match m with SystemMessage _ -> false | _ -> true)
@@ -997,7 +997,7 @@ let ``trimToContextWindow drops oldest messages first`` () =
           UserMessage ("recent", [])
           AssistantMessage ("recent-reply", None) ]
     // Very tight budget: only last 2 messages fit
-    let result = trimToContextWindow 100 50 None msgs
+    let result = trimToContextWindow 100 50 None None msgs
     // recent messages should be kept; old-first may be dropped
     let allContent = result |> List.collect (fun m ->
         match m with
@@ -1221,25 +1221,25 @@ let private snapWithMessages (msgs: Message list) =
 [<Fact>]
 let ``needsConsolidation false when no messages`` () =
     let snap = snapWithMessages []
-    Assert.False(needsConsolidation snap (cfgWithWindow 10))
+    Assert.False(needsConsolidation snap (cfgWithWindow 10) None None)
 
 [<Fact>]
 let ``needsConsolidation false when below window size`` () =
     let msgs = List.replicate 4 (UserMessage ("hi", []))
     let snap = snapWithMessages msgs
-    Assert.False(needsConsolidation snap (cfgWithWindow 5))
+    Assert.False(needsConsolidation snap (cfgWithWindow 5) None None)
 
 [<Fact>]
 let ``needsConsolidation true when at window size`` () =
     let msgs = List.replicate 5 (UserMessage ("hi", []))
     let snap = snapWithMessages msgs
-    Assert.True(needsConsolidation snap (cfgWithWindow 5))
+    Assert.True(needsConsolidation snap (cfgWithWindow 5) None None)
 
 [<Fact>]
 let ``needsConsolidation true when above window size`` () =
     let msgs = List.replicate 9 (UserMessage ("hi", []))
     let snap = snapWithMessages msgs
-    Assert.True(needsConsolidation snap (cfgWithWindow 5))
+    Assert.True(needsConsolidation snap (cfgWithWindow 5) None None)
 
 [<Fact>]
 let ``needsConsolidation counts only unconsolidated messages`` () =
@@ -1250,7 +1250,7 @@ let ``needsConsolidation counts only unconsolidated messages`` () =
     let snap =
         SessionSnapshot.create sid msgs 6 now now
         |> function Result.Ok s -> s | Error e -> failwith e
-    Assert.False(needsConsolidation snap (cfgWithWindow 5))
+    Assert.False(needsConsolidation snap (cfgWithWindow 5) None None)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AgentHook integration tests
@@ -1620,7 +1620,7 @@ let ``trimToContextWindow returns messages unchanged when budget is zero or nega
     // contextWindowTokens (100) - maxTokens (100) - _SNIP_BUFFER (1024) = -1024 <= 0
     // → messages returned unchanged
     let msgs = [ UserMessage ("hi", []); AssistantMessage ("hello", None) ]
-    let result = trimToContextWindow 100 100 None msgs
+    let result = trimToContextWindow 100 100 None None msgs
     Assert.Equal<Message list>(msgs, result)
 
 [<Fact>]
@@ -1657,7 +1657,7 @@ let ``trimToContextWindow all-assistant messages after trim starts from earliest
     // Both AssistantMessages are tiny → they both fit → no trimming needed
     // To force the None branch, we need all non-system kept messages to NOT be UserMessage.
     // Use a very small budget so only 1 message fits, and that message is AssistantMessage.
-    let result = trimToContextWindow 1200 1 None msgs
+    let result = trimToContextWindow 1200 1 None None msgs
     // Either both fit (budget 175 vs ~10 tokens each) or at worst the last assistant message survives
     Assert.NotEmpty(result)
 
@@ -1675,7 +1675,7 @@ let ``trimToContextWindow keepFromUser None returns last kept message when no us
     let recentAsst = AssistantMessage ("recent", None)
     let bigUser    = UserMessage (String.replicate 1280 "u", [])
     let msgs = [ bigUser; recentAsst ]   // recentAsst is newest (List.rev puts it first)
-    let result = trimToContextWindow 1350 1 None msgs
+    let result = trimToContextWindow 1350 1 None None msgs
     Assert.Equal<Message list>([ recentAsst ], result)
 
 [<Fact>]
@@ -1687,7 +1687,7 @@ let ``trimToContextWindow contextBlockLimit overrides computed budget`` () =
     let largeMsg  = UserMessage (String.replicate 1000 "x", [])   // ~250 tokens
     let msgs = [ largeMsg; shortMsg ]   // largeMsg is oldest
     // contextWindowTokens=0 would normally disable trimming, but contextBlockLimit=Some 50 overrides
-    let result = trimToContextWindow 0 0 (Some 50) msgs
+    let result = trimToContextWindow 0 0 (Some 50) None msgs
     // shortMsg should survive; largeMsg (250 tokens) exceeds budget and should be dropped
     Assert.DoesNotContain(largeMsg, result)
     Assert.Contains(shortMsg, result)
@@ -1696,7 +1696,7 @@ let ``trimToContextWindow contextBlockLimit overrides computed budget`` () =
 let ``trimToContextWindow contextBlockLimit=None with contextWindowTokens=0 disables trimming`` () =
     // No limit at all — messages pass through unchanged.
     let msgs = [ UserMessage (String.replicate 5000 "x", []); AssistantMessage ("hi", None) ]
-    let result = trimToContextWindow 0 0 None msgs
+    let result = trimToContextWindow 0 0 None None msgs
     Assert.Equal<Message list>(msgs, result)
 
 // ═══════════════════════════════════════════════════════════════════════════

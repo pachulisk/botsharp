@@ -196,7 +196,7 @@ let createSessionActor
                     // Runs after replying so it doesn't delay the response, but before the
                     // next message is processed (the actor is still busy during this step).
                     let! (newSnap, newSummary) =
-                        if needsConsolidation snap deps'.Config then
+                        if needsConsolidation snap deps'.Config deps'.TokenTracker.Value deps'.RuleEngine then
                             async {
                                 let! consolidationResult = consolidate snap deps'
                                 match consolidationResult with
