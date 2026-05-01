@@ -114,7 +114,13 @@ type MessageBus(coordinator: AgentCoordinator, port: ChannelPort) =
 /// Sequential CLI request/response loop.
 /// The `deps` parameter gives access to Config (for /status) and the
 /// workspace path (for /dream, /dream-log).
-let startCli (coordinator: AgentCoordinator) (port: ChannelPort) (deps: AgentDependencies) : Async<unit> =
+let startCli
+    (coordinator  : AgentCoordinator)
+    (port         : ChannelPort)
+    (deps         : AgentDependencies)
+    (switchModel  : string -> Async<Result<string * string, string>>)
+    (listModels   : unit -> string list)
+    : Async<unit> =
     let rec loop () = async {
         let! received = port.Receive
         match received with
@@ -143,6 +149,7 @@ Commands:
   /new              — Start a new conversation (archives history)
   /clear            — Clear history without archiving
   /history [n]      — Show last n messages (default 10)
+  /model [name]     — List or switch LLM model (persists to config)
   /stop             — Exit
   /restart          — Restart the process
   /status           — Show current configuration
@@ -182,6 +189,23 @@ Commands:
                 match usageOpt with
                 | Some u -> printfn "  Last call:      %s" (TokenUsage.formatUsage u)
                 | None   -> ()
+                return! loop ()
+
+            | Command (SwitchModel None) ->
+                printfn "\nCurrent model: %s (%s)" deps.Config.DefaultModel deps.Config.DefaultProvider
+                printfn "Available models:"
+                for line in listModels () do printfn "%s" line
+                printfn "\nUsage: /model <model-name>"
+                return! loop ()
+
+            | Command (SwitchModel (Some modelName)) ->
+                let! result = switchModel modelName
+                match result with
+                | Ok (model, provider) ->
+                    printfn "\nSwitched to %s (provider: %s). Config saved." model provider
+                    printfn "Restart to apply the new model. Use /new to start a fresh session."
+                | Error msg ->
+                    printfn "\nError: %s" msg
                 return! loop ()
 
             // /clear and /history are routed to the coordinator (handled in SessionActor)

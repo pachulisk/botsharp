@@ -44,6 +44,10 @@ let private pShowHistory : Parser<UserInput, unit> =
     pstring "/history" >>. spaces >>. opt (many1Chars digit) .>> eof
     |>> (fun nOpt -> Command (ShowHistory (nOpt |> Option.map int)))
 
+let private pSwitchModel : Parser<UserInput, unit> =
+    pstring "/model" >>. spaces >>. opt (many1Chars (noneOf " \t\r\n")) .>> eof
+    |>> (fun nameOpt -> Command (SwitchModel nameOpt))
+
 // ── Optional SHA argument: lowercase hex only ([0-9a-f]+) ────────────────
 // Restricts to lowercase hex so that /dream-log ZZZ is rejected at parse
 // time rather than silently returning no results at lookup time.
@@ -72,6 +76,7 @@ let private pSlashCommand : Parser<UserInput, unit> =
         attempt pShowHelp
         attempt pRestart
         attempt pShowStatus
+        attempt pSwitchModel
         attempt pDream
     ]
 

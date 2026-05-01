@@ -340,6 +340,11 @@ This file stores important information that persists across sessions.
     let mutable routeRef : (InboundMessage -> Async<unit>) =
         fun _ -> async { return () }   // placeholder; replaced below
 
+    // Model switch callback — returns (newModelName, newProviderName) or error.
+    // Set after provider is resolved; called by /model command handlers.
+    let mutable switchModelRef : (string -> Async<Result<string * string, string>>) =
+        fun _ -> async { return Error "not initialized" }
+
     // Cron coordinator ref — set once coordinator is built (same mutable ref cycle-break pattern).
     let mutable cronRouteRef : (InboundMessage -> Async<Result<AgentResult, AgentError>>) =
         fun _ -> async { return Result.Ok (PlainResponse "") }
@@ -523,6 +528,40 @@ This file stores important information that persists across sessions.
     }
     cronRouteRef <- fun msg -> coordinator.Route msg
     spawnRouteRef <- routeRef   // subagent announcements go through the same coordinator
+
+    // List models that have API keys configured
+    let listAvailableModels () =
+        providers
+        |> NonEmptyList.toList
+        |> List.choose (fun spec ->
+            match resolveApiKey spec config with
+            | Some _ -> Some (spec.Id, config.DefaultModel)   // (providerId, currentDefault)
+            | None -> None)
+        |> List.map (fun (pid, current) ->
+            let isActive = pid = config.DefaultProvider
+            if isActive then $"  {config.DefaultModel} ({pid}) ✓"
+            else $"  ({pid})")
+
+    // Wire model switch callback
+    switchModelRef <- fun modelName -> async {
+        // 1. Detect provider for the new model
+        match detectProvider modelName with
+        | None -> return Error $"Unknown model '{modelName}'. No matching provider found."
+        | Some spec ->
+            // 2. Check if we have an API key for this provider
+            match resolveApiKey spec config with
+            | None -> return Error $"No API key configured for provider '{spec.Id}'."
+            | Some _ ->
+                // 3. Update config.json
+                let configPath = expandPath defaultConfigPath
+                let newConfig = { config with DefaultModel = modelName; DefaultProvider = spec.Id }
+                let! saveResult = BotSharp.Infrastructure.Config.ConfigWriter.saveConfig configPath newConfig
+                match saveResult with
+                | Error msg -> return Error $"Failed to save config: {msg}"
+                | Ok () ->
+                    eprintfn "[/model] Switched to %s (provider: %s), saved to config.json" modelName spec.Id
+                    return Ok (modelName, spec.Id)
+    }
 
     // ── API server (start function, shared by both modes) ─────────────────────
     let startApiServer (port: int) (host: string) =
@@ -950,7 +989,8 @@ This file stores important information that persists across sessions.
         | Some tgConfig ->
             Async.Start(
                 startTelegram tgConfig deps httpClient tgCts.Token
-                    (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg)),
+                    (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg))
+                    (fun m -> switchModelRef m) (fun () -> listAvailableModels ()),
                 tgCts.Token)
             printfn "[gateway] Telegram channel started"
         | None -> ()
@@ -1118,12 +1158,13 @@ This file stores important information that persists across sessions.
             use cts = new System.Threading.CancellationTokenSource()
             Async.Start(
                 startTelegram tgConfig deps httpClient cts.Token
-                    (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg)),
+                    (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg))
+                    (fun m -> switchModelRef m) (fun () -> listAvailableModels ()),
                 cts.Token)
-            startCli coordinator port deps |> Async.RunSynchronously
+            startCli coordinator port deps switchModelRef listAvailableModels |> Async.RunSynchronously
             cts.Cancel()
         | None ->
-            startCli coordinator port deps |> Async.RunSynchronously
+            startCli coordinator port deps switchModelRef listAvailableModels |> Async.RunSynchronously
 
         apiServerOpt |> Option.iter (fun s -> s.Stop())
         wsServerOpt  |> Option.iter (fun s -> s.Stop())

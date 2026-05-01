@@ -461,15 +461,17 @@ type private MediaGroupState = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 let private processMessage
-    (bot         : ITelegramBotClient)
-    (httpClient  : HttpClient)
-    (tokenStr    : string)
-    (tgCfg       : TelegramConfig)
-    (coordinator : TelegramCoordinator)
-    (mediaGroups : ConcurrentDictionary<string, MediaGroupState>)
-    (botUsername : string)
-    (ct          : CancellationToken)
-    (msg         : TgMessage)
+    (bot            : ITelegramBotClient)
+    (httpClient     : HttpClient)
+    (tokenStr       : string)
+    (tgCfg          : TelegramConfig)
+    (coordinator    : TelegramCoordinator)
+    (mediaGroups    : ConcurrentDictionary<string, MediaGroupState>)
+    (botUsername     : string)
+    (switchModelRef : string -> Async<Result<string * string, string>>)
+    (listModelsRef  : unit -> string list)
+    (ct             : CancellationToken)
+    (msg            : TgMessage)
     : Async<unit> =
     async {
         // Ignore non-user messages (channel posts, service messages)
@@ -544,6 +546,7 @@ let private processMessage
                 "Commands:\n/new              — Start a new conversation (archives history)\n" +
                 "/clear            — Clear history without archiving\n" +
                 "/history [n]      — Show last n messages (default 10)\n" +
+                "/model            — Switch LLM model\n" +
                 "/stop             — Exit\n/status           — Show configuration\n" +
                 "/dream            — Consolidate memory and save a dream entry\n" +
                 "/dream-log        — List all dream entries\n" +
@@ -645,6 +648,39 @@ let private processMessage
                     | Result.Error e ->
                         do! bot.SendMessage(TgChatId(chatId), sprintf "[dream-restore error] %A" e)
                             |> Async.AwaitTask |> Async.Ignore
+
+        | Command (SwitchModel nameOpt) ->
+            // /model: list or switch models with InlineKeyboard
+            // switchModelRef and listModelsRef are set from Program.fs
+            match nameOpt with
+            | Some modelName ->
+                // Direct switch
+                let! result = switchModelRef modelName
+                match result with
+                | Ok (model, provider) ->
+                    do! bot.SendMessage(TgChatId(chatId), $"Switched to {model} ({provider}). Config saved.\nSend /new to start a fresh session.")
+                        |> Async.AwaitTask |> Async.Ignore
+                | Error msg ->
+                    do! bot.SendMessage(TgChatId(chatId), $"Error: {msg}")
+                        |> Async.AwaitTask |> Async.Ignore
+            | None ->
+                // List available models with InlineKeyboard buttons
+                let models = listModelsRef ()
+                if models.IsEmpty then
+                    do! bot.SendMessage(TgChatId(chatId), "No models with API keys configured.")
+                        |> Async.AwaitTask |> Async.Ignore
+                else
+                    let currentModel = coordinator.Config.DefaultModel
+                    let rows : seq<seq<Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton>> =
+                        models
+                        |> List.map (fun line ->
+                            let trimmed = line.Trim()
+                            seq { Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton.WithCallbackData(trimmed, "model:" + trimmed) })
+                        |> Seq.ofList
+                    let keyboard = Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(rows)
+                    do! bot.SendMessage(TgChatId(chatId), $"Current model: {currentModel}\n\nSelect a model:",
+                            replyMarkup = keyboard)
+                        |> Async.AwaitTask |> Async.Ignore
 
         | Command NewSession
         | Command ClearHistory
@@ -808,14 +844,16 @@ let private mediaGroupFlusher
 // ═══════════════════════════════════════════════════════════════════════════
 
 let private pollLoop
-    (bot         : ITelegramBotClient)
-    (httpClient  : HttpClient)
-    (tokenStr    : string)
-    (tgCfg       : TelegramConfig)
-    (coordinator : TelegramCoordinator)
-    (mediaGroups : ConcurrentDictionary<string, MediaGroupState>)
-    (botUsername : string)
-    (ct          : CancellationToken)
+    (bot            : ITelegramBotClient)
+    (httpClient     : HttpClient)
+    (tokenStr       : string)
+    (tgCfg          : TelegramConfig)
+    (coordinator    : TelegramCoordinator)
+    (mediaGroups    : ConcurrentDictionary<string, MediaGroupState>)
+    (botUsername     : string)
+    (switchModel    : string -> Async<Result<string * string, string>>)
+    (listModels     : unit -> string list)
+    (ct             : CancellationToken)
     : Async<unit> =
     let rec loop (offset: int) = async {
         if ct.IsCancellationRequested then ()
@@ -846,7 +884,7 @@ let private pollLoop
                     Async.Start(async {
                         try
                             do! processMessage bot httpClient tokenStr tgCfg coordinator
-                                    mediaGroups botUsername ct msg
+                                    mediaGroups botUsername switchModel listModels ct msg
                         with ex ->
                             eprintfn "[Telegram] Unhandled error: %s" ex.Message
                     }, ct)
@@ -863,11 +901,13 @@ let private pollLoop
 // ═══════════════════════════════════════════════════════════════════════════
 
 let startTelegram
-    (tgCfg      : TelegramConfig)
-    (baseDeps   : AgentDependencies)
-    (httpClient : HttpClient)
-    (ct         : CancellationToken)
-    (onBotReady : ITelegramBotClient -> TelegramConfig -> unit)
+    (tgCfg        : TelegramConfig)
+    (baseDeps     : AgentDependencies)
+    (httpClient   : HttpClient)
+    (ct           : CancellationToken)
+    (onBotReady   : ITelegramBotClient -> TelegramConfig -> unit)
+    (switchModel  : string -> Async<Result<string * string, string>>)
+    (listModels   : unit -> string list)
     : Async<unit> =
     async {
         let tokenStr = TelegramBotToken.value tgCfg.Token
@@ -894,7 +934,7 @@ let startTelegram
 
         do! Async.Parallel [|
                 mediaGroupFlusher coordinator mediaGroups ct
-                pollLoop bot httpClient tokenStr tgCfg coordinator mediaGroups botUsername ct
+                pollLoop bot httpClient tokenStr tgCfg coordinator mediaGroups botUsername switchModel listModels ct
             |] |> Async.Ignore
 
         coordinator.ShutdownAll()

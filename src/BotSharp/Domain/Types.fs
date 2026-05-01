@@ -67,6 +67,7 @@ type SlashCommand =
     | Restart
     | ShowStatus
     | ShowHistory   of count: int option
+    | SwitchModel   of modelName: string option   // None = list available; Some = switch to model
     | Dream
     | DreamLog     of sha: string option
     | DreamRestore of sha: string option
