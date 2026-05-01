@@ -68,6 +68,9 @@ type SlashCommand =
     | ShowStatus
     | ShowHistory   of count: int option
     | SwitchModel   of modelName: string option   // None = list available; Some = switch to model
+    | ListSessions  of page: int option           // /sessions [page]
+    | SearchSessions of query: string             // /search <keyword>
+    | RebuildIndex                                // /rebuild-index
     | Dream
     | DreamLog     of sha: string option
     | DreamRestore of sha: string option

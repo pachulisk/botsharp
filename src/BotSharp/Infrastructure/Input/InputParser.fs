@@ -48,6 +48,17 @@ let private pSwitchModel : Parser<UserInput, unit> =
     pstring "/model" >>. spaces >>. opt (many1Chars (noneOf " \t\r\n")) .>> eof
     |>> (fun nameOpt -> Command (SwitchModel nameOpt))
 
+let private pListSessions : Parser<UserInput, unit> =
+    pstring "/sessions" >>. spaces >>. opt (many1Chars digit) .>> eof
+    |>> (fun nOpt -> Command (ListSessions (nOpt |> Option.map int)))
+
+let private pSearchSessions : Parser<UserInput, unit> =
+    pstring "/search" >>. spaces >>. many1Chars anyChar .>> eof
+    |>> (fun query -> Command (SearchSessions query))
+
+let private pRebuildIndex : Parser<UserInput, unit> =
+    pstring "/rebuild-index" .>> spaces .>> eof >>% Command RebuildIndex
+
 // ── Optional SHA argument: lowercase hex only ([0-9a-f]+) ────────────────
 // Restricts to lowercase hex so that /dream-log ZZZ is rejected at parse
 // time rather than silently returning no results at lookup time.
@@ -77,6 +88,9 @@ let private pSlashCommand : Parser<UserInput, unit> =
         attempt pRestart
         attempt pShowStatus
         attempt pSwitchModel
+        attempt pListSessions
+        attempt pSearchSessions
+        attempt pRebuildIndex
         attempt pDream
     ]
 

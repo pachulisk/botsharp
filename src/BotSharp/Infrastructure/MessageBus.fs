@@ -120,6 +120,7 @@ let startCli
     (deps         : AgentDependencies)
     (switchModel  : string -> Async<Result<string * string, string>>)
     (listModels   : unit -> string list)
+    (openStateDb  : (unit -> Microsoft.Data.Sqlite.SqliteConnection) option)
     : Async<unit> =
     let rec loop () = async {
         let! received = port.Receive
@@ -150,6 +151,9 @@ Commands:
   /clear            — Clear history without archiving
   /history [n]      — Show last n messages (default 10)
   /model [name]     — List or switch LLM model (persists to config)
+  /sessions [page]  — List session history
+  /search <keyword> — Search sessions by keyword
+  /rebuild-index    — Rebuild SQLite index from JSONL
   /stop             — Exit
   /restart          — Restart the process
   /status           — Show current configuration
@@ -206,6 +210,54 @@ Commands:
                     printfn "Restart to apply the new model. Use /new to start a fresh session."
                 | Error msg ->
                     printfn "\nError: %s" msg
+                return! loop ()
+
+            | Command (ListSessions pageOpt) ->
+                match openStateDb with
+                | None -> printfn "\nSQLite index not enabled."
+                | Some factory ->
+                    try
+                        use conn = factory ()
+                        let page = pageOpt |> Option.defaultValue 0
+                        let! entries = BotSharp.Infrastructure.Storage.StateDb.listSessions conn page 20 None
+                        if entries.IsEmpty then printfn "\nNo sessions found."
+                        else
+                            printfn "\nSessions (page %d):" page
+                            for e in entries do
+                                let (SessionId sid) = e.Id
+                                let preview = e.FirstUserMessage |> Option.map (fun s -> if s.Length > 60 then s.[..59] + "..." else s) |> Option.defaultValue ""
+                                printfn "  [%s] %s  %d msgs  %s" (e.UpdatedAt.ToString("MM-dd HH:mm")) sid e.MessageCount preview
+                    with ex -> printfn "\nError: %s" ex.Message
+                return! loop ()
+
+            | Command (SearchSessions query) ->
+                match openStateDb with
+                | None -> printfn "\nSQLite index not enabled."
+                | Some factory ->
+                    try
+                        use conn = factory ()
+                        let! entries = BotSharp.Infrastructure.Storage.StateDb.searchSessions conn query 10
+                        if entries.IsEmpty then printfn "\nNo sessions matching '%s'." query
+                        else
+                            printfn "\nSearch results for '%s':" query
+                            for e in entries do
+                                let (SessionId sid) = e.Id
+                                let preview = e.FirstUserMessage |> Option.map (fun s -> if s.Length > 60 then s.[..59] + "..." else s) |> Option.defaultValue ""
+                                printfn "  [%s] %s  %d msgs  %s" (e.UpdatedAt.ToString("MM-dd HH:mm")) sid e.MessageCount preview
+                    with ex -> printfn "\nError: %s" ex.Message
+                return! loop ()
+
+            | Command RebuildIndex ->
+                match openStateDb with
+                | None -> printfn "\nSQLite index not enabled."
+                | Some factory ->
+                    try
+                        use conn = factory ()
+                        let! result = BotSharp.Infrastructure.Storage.StateDb.rebuildIndex deps.Config.WorkspacePath conn
+                        printfn "\nIndex rebuilt: %d sessions, %d consolidations, %d errors"
+                            result.SessionsIndexed result.ConsolidationsIndexed result.Errors.Length
+                        for err in result.Errors do printfn "  Error: %s" err
+                    with ex -> printfn "\nRebuild error: %s" ex.Message
                 return! loop ()
 
             // /clear and /history are routed to the coordinator (handled in SessionActor)

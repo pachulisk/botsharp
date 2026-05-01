@@ -556,7 +556,18 @@ This file stores important information that persists across sessions.
             | _ -> ()
             return result
         }
-        BuildSystemPrompt = buildSystemPrompt config.DisabledSkills config.SystemPromptAppend
+        BuildSystemPrompt = fun channel wp -> async {
+            let! prompt = buildSystemPrompt config.DisabledSkills config.SystemPromptAppend channel wp
+            // Phase 4: track memory usage when MEMORY.md is injected into system prompt
+            match openStateDb with
+            | Some factory when prompt.Contains("# Memory") ->
+                try
+                    use conn = factory ()
+                    do! BotSharp.Infrastructure.Storage.StateDb.recordMemoryUsage conn "memory:global"
+                with ex -> eprintfn "[StateDb] Memory usage tracking failed (non-fatal): %s" ex.Message
+            | _ -> ()
+            return prompt
+        }
         Config            = config
         StreamHook        = if isGateway then NoStreaming else cliStreamHook
         Hook              = if isGateway then AgentHook.none else cliAgentHook true config.SendToolHints
@@ -1233,10 +1244,10 @@ This file stores important information that persists across sessions.
                     (fun bot cfg -> telegramSendOpt <- Some (sendOutboundMessage bot cfg))
                     (fun m -> switchModelRef m) (fun () -> listAvailableModels ()),
                 cts.Token)
-            startCli coordinator port deps switchModelRef listAvailableModels |> Async.RunSynchronously
+            startCli coordinator port deps switchModelRef listAvailableModels openStateDb |> Async.RunSynchronously
             cts.Cancel()
         | None ->
-            startCli coordinator port deps switchModelRef listAvailableModels |> Async.RunSynchronously
+            startCli coordinator port deps switchModelRef listAvailableModels openStateDb |> Async.RunSynchronously
 
         apiServerOpt |> Option.iter (fun s -> s.Stop())
         wsServerOpt  |> Option.iter (fun s -> s.Stop())

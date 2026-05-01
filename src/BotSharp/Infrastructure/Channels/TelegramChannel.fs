@@ -685,6 +685,9 @@ let private processMessage
         | Command NewSession
         | Command ClearHistory
         | Command (ShowHistory _)
+        | Command (ListSessions _)
+        | Command (SearchSessions _)
+        | Command RebuildIndex
         | ChatMessage _ ->
             let! media = extractMedia bot httpClient tokenStr msg
 
