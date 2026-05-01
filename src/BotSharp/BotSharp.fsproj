@@ -32,6 +32,7 @@
     <Compile Include="Infrastructure/Providers/LlmResponseParser.fs" />
     <Compile Include="Infrastructure/Providers/OpenAICompatAdapter.fs" />
     <Compile Include="Infrastructure/Providers/ProviderRegistry.fs" />
+    <Compile Include="Infrastructure/Providers/TranscriptionProvider.fs" />
     <Compile Include="Infrastructure/Storage/SessionParser.fs" />
     <Compile Include="Infrastructure/Storage/JsonlStore.fs" />
     <Compile Include="Infrastructure/Storage/DreamStore.fs" />
@@ -117,6 +118,9 @@
 
     <!-- Pocket channel (botx-pocket HostBridge integration via Unix domain socket) -->
     <Compile Include="Infrastructure/Channels/PocketChannel.fs" />
+
+    <!-- Pocket tool bridge (registers HostBridge tools — after PocketChannel) -->
+    <Compile Include="Infrastructure/Tools/PocketToolBridge.fs" />
 
     <!-- Message bus (after Application layer — depends on AgentCoordinator) -->
     <Compile Include="Infrastructure/MessageBus.fs" />

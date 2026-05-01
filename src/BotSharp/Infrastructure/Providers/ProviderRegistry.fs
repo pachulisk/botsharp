@@ -124,6 +124,38 @@ let providers : NonEmptyList<ProviderSpec> =
             ThinkingStyle = None
             EnvKeyName   = "OPENAI_API_KEY" }
 
+          { Id           = "volcengine"
+            Keywords     = [ "doubao"; "skylark" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "VOLCENGINE_API_KEY" }
+
+          { Id           = "mistral"
+            Keywords     = [ "mistral"; "codestral"; "pixtral" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "MISTRAL_API_KEY" }
+
+          { Id           = "together"
+            Keywords     = [ "together" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = true
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "TOGETHER_API_KEY" }
+
+          { Id           = "perplexity"
+            Keywords     = [ "sonar" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = false
+            Capabilities = Set.ofList [ Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "PERPLEXITY_API_KEY" }
+
           // ── Local deployment ─────────────────────────────────────────────────────
 
           { Id           = "ollama"
@@ -133,6 +165,22 @@ let providers : NonEmptyList<ProviderSpec> =
             Capabilities = Set.ofList [ FunctionCalling; Streaming ]
             ThinkingStyle = None
             EnvKeyName   = "" }       // Ollama doesn't require an API key
+
+          { Id           = "vllm"
+            Keywords     = [ "vllm" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = true       // routes any model through vLLM
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "" }       // vLLM doesn't require an API key
+
+          { Id           = "lmstudio"
+            Keywords     = [ "lmstudio"; "lm-studio" ]
+            Backend      = OpenAICompatBackend
+            IsGateway    = true
+            Capabilities = Set.ofList [ FunctionCalling; Streaming ]
+            ThinkingStyle = None
+            EnvKeyName   = "" }       // LM Studio doesn't require an API key
         ]
 
 /// Known base URLs for each provider (used when no custom base_url is set)
@@ -152,6 +200,12 @@ let private baseUrls : Map<string, string> =
         "siliconflow", "https://api.siliconflow.cn/v1"
         "aihubmix",    "https://aihubmix.com/v1"
         "ollama",      "http://localhost:11434/v1"
+        "volcengine",  "https://ark.cn-beijing.volces.com/api/v3"
+        "mistral",     "https://api.mistral.ai/v1"
+        "together",    "https://api.together.xyz/v1"
+        "perplexity",  "https://api.perplexity.ai"
+        "vllm",        "http://localhost:8000/v1"
+        "lmstudio",    "http://localhost:1234/v1"
     ]
 
 // ── Known context window sizes ────────────────────────────────────────────
@@ -211,9 +265,21 @@ let private knownContextWindows : (string * int) list = [
     // Moonshot / Kimi
     "moonshot-v1-128k",  128_000
     "moonshot",          128_000
+    // Volcengine (Doubao)
+    "doubao-pro",        128_000
+    "doubao",             32_000
+    "skylark",            32_000
+    // Mistral
+    "mistral-large",     128_000
+    "mistral-medium",     32_000
+    "codestral",          32_000
+    "pixtral",           128_000
+    "mistral",            32_000
     // Misc
     "minimax",           245_760
     "glm-4",             128_000
+    "sonar-pro",         200_000
+    "sonar",             127_072
 ]
 
 /// Auto-detect the context window size for a model.

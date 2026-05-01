@@ -652,12 +652,43 @@ let private processMessage
         | ChatMessage _ ->
             let! media = extractMedia bot httpClient tokenStr msg
 
+            // Transcribe voice/audio messages if transcription is configured
+            let! transcriptionText =
+                async {
+                    let voiceMedia =
+                        media |> List.choose (function
+                            | AudioFile p -> Some (LocalFilePath.value p)
+                            | _ -> None)
+                    if voiceMedia.IsEmpty then return ""
+                    else
+                        // Try to get transcription API key from config
+                        let transcriptionKey =
+                            coordinator.Config.ApiKeys
+                            |> Map.tryFind "groq"
+                            |> Option.map ApiKey.value
+                            |> Option.defaultValue ""
+                        if transcriptionKey = "" then return ""
+                        else
+                            let config = BotSharp.Infrastructure.Providers.TranscriptionProvider.defaultGroqConfig transcriptionKey
+                            let! results =
+                                voiceMedia
+                                |> List.map (fun path ->
+                                    BotSharp.Infrastructure.Providers.TranscriptionProvider.transcribe httpClient config path)
+                                |> Async.Parallel
+                            let texts = results |> Array.filter (fun s -> s <> "") |> Array.toList
+                            if texts.IsEmpty then return ""
+                            else return "[transcription: " + (String.concat " " texts) + "]"
+                }
+
             // Inject reply context into the text
             let replyCtx = extractReplyContext msg
+            let baseText = if transcriptionText <> "" && rawText = "" then transcriptionText
+                           elif transcriptionText <> "" then rawText + "\n" + transcriptionText
+                           else rawText
             let fullText =
                 match replyCtx with
-                | Some ctx -> ctx + "\n" + rawText
-                | None     -> rawText
+                | Some ctx -> ctx + "\n" + baseText
+                | None     -> baseText
 
             let finalInput =
                 match input with
