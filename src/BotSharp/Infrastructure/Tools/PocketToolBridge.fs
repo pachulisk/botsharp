@@ -344,6 +344,14 @@ let private toolDefs : ToolDef list = [
     { Method = "media.pause"; ToolName = "pocket_media_pause"
       Description = "Pause media playback"
       Params = [] }
+
+    // ── Agent delegation ─────────────────────────────────────────────────────
+    { Method = "agent_delegate"; ToolName = "pocket_agent_delegate"
+      Description = "Delegate a task to another agent in the team (e.g., advisor, translator, code_reviewer). The target agent processes the task and returns the result synchronously."
+      Params = [req "agent_id" JsString "ID of the target agent (e.g., 'advisor', 'translator')"
+                req "task" JsString "Task description for the target agent"
+                opt "context" JsString "Additional context to pass to the target agent"
+                opt "timeout_seconds" JsNumber "Timeout in seconds (default: 30)"] }
 ]
 
 // ── Tool registration ────────────────────────────────────────────────────────

@@ -357,3 +357,143 @@ let startPocket (coordinator: AgentCoordinator) (port: ChannelPort) (rpc: Pocket
                 return! loop ()
     }
     loop ()
+
+// ── CLIPS config validation ──────────────────────────────────────────────────
+
+/// CLIPS rules for pocket config constraint validation.
+/// Checks: socket_name presence, provider/api_key consistency,
+/// temperature range, model presence, and cross-field constraints.
+let private pocketConfigRules = """
+;; Pocket config validation templates
+(deftemplate pocket-config
+  (slot socket-name (type STRING))
+  (slot agent-id (type STRING))
+  (slot provider (type STRING))
+  (slot model (type STRING))
+  (slot temperature (type FLOAT))
+  (slot has-api-key (type INTEGER))
+  (slot workspace-path (type STRING)))
+
+(deftemplate pocket-config-error
+  (slot field (type STRING))
+  (slot message (type STRING)))
+
+;; ── Constraint rules ────────────────────────────────────────────────
+
+;; socket_name must not be empty
+(defrule pocket-no-socket
+  (pocket-config (socket-name ""))
+  =>
+  (assert (pocket-config-error
+    (field "socket_name")
+    (message "socket_name is required for pocket mode"))))
+
+;; agent_id must not be empty
+(defrule pocket-no-agent-id
+  (pocket-config (agent-id ""))
+  =>
+  (assert (pocket-config-error
+    (field "agent_id")
+    (message "agent_id must not be empty"))))
+
+;; provider requires matching api_key
+(defrule pocket-no-api-key
+  (pocket-config (provider ?p&~"ollama"&~"") (has-api-key 0))
+  =>
+  (assert (pocket-config-error
+    (field "api_keys")
+    (message "No API key configured for provider. Set api_keys in config."))))
+
+;; temperature out of range
+(defrule pocket-bad-temperature
+  (pocket-config (temperature ?t&:(or (< ?t 0.0) (> ?t 2.0))))
+  =>
+  (assert (pocket-config-error
+    (field "temperature")
+    (message "temperature must be between 0.0 and 2.0"))))
+
+;; model must be specified
+(defrule pocket-no-model
+  (pocket-config (model ""))
+  =>
+  (assert (pocket-config-error
+    (field "model")
+    (message "default_model must be specified"))))
+
+;; workspace path should be absolute
+(defrule pocket-relative-workspace
+  (pocket-config (workspace-path ?w&:(and (> (str-length ?w) 0) (neq (sub-string 1 1 ?w) "/"))))
+  =>
+  (assert (pocket-config-error
+    (field "workspace_path")
+    (message "workspace_path should be an absolute path"))))
+"""
+
+/// Validate pocket config using CLIPS rules.
+/// Returns a list of (field, message) errors. Empty list = valid.
+let validatePocketConfig
+    (pocketCfg : PocketChannelConfig)
+    (botCfg    : BotSharpConfig)
+    (ruleEngine: BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option)
+    : (string * string) list =
+
+    match ruleEngine with
+    | None ->
+        // No CLIPS available — do basic F# validation
+        [ if pocketCfg.SocketName = "" then yield ("socket_name", "socket_name is required")
+          if pocketCfg.AgentId = "" then yield ("agent_id", "agent_id must not be empty")
+          if botCfg.DefaultModel = "" then yield ("model", "default_model must be specified")
+          if botCfg.Temperature < 0.0 || botCfg.Temperature > 2.0 then
+              yield ("temperature", "temperature must be between 0.0 and 2.0") ]
+
+    | Some engine ->
+        // Load pocket validation rules
+        let env = engine.Env
+        let constructs =
+            pocketConfigRules.Split([| "(def" |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun s -> "(def" + s.TrimEnd())
+            |> Array.filter (fun s -> s.Length > 10)
+        for c in constructs do
+            BotSharp.Infrastructure.Rules.ClipsEnvironment.loadFromString env c |> ignore
+
+        // Reset and assert config facts
+        BotSharp.Infrastructure.Rules.ClipsEnvironment.reset env
+
+        let hasApiKey =
+            if Map.isEmpty botCfg.ApiKeys then 0 else 1
+
+        let factStr =
+            "(pocket-config"
+            + " (socket-name \"" + pocketCfg.SocketName + "\")"
+            + " (agent-id \"" + pocketCfg.AgentId + "\")"
+            + " (provider \"" + botCfg.DefaultProvider + "\")"
+            + " (model \"" + botCfg.DefaultModel + "\")"
+            + " (temperature " + string botCfg.Temperature + ")"
+            + " (has-api-key " + string hasApiKey + ")"
+            + " (workspace-path \"" + botCfg.WorkspacePath + "\")"
+            + ")"
+
+        BotSharp.Infrastructure.Rules.ClipsEnvironment.assertFact env factStr |> ignore
+
+        // Run rules
+        BotSharp.Infrastructure.Rules.ClipsEnvironment.run env -1L |> ignore
+
+        // Extract pocket-config-error facts
+        let errors = ResizeArray<string * string>()
+        let countExpr = "(length$ (find-all-facts ((?f pocket-config-error)) TRUE))"
+        match BotSharp.Infrastructure.Rules.ClipsEnvironment.evalInt env countExpr with
+        | Ok countL when countL > 0L ->
+            let count = int countL
+            for i in 1..count do
+                let readSlot slot =
+                    let expr = $"(fact-slot-value (nth$ {i} (find-all-facts ((?f pocket-config-error)) TRUE)) {slot})"
+                    match BotSharp.Infrastructure.Rules.ClipsEnvironment.evalString env expr with
+                    | Ok v -> v
+                    | Error _ -> ""
+                errors.Add(readSlot "field", readSlot "message")
+        | _ -> ()
+
+        // Reset for next use
+        BotSharp.Infrastructure.Rules.ClipsEnvironment.reset env
+
+        errors |> Seq.toList

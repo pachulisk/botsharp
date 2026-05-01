@@ -339,18 +339,26 @@ This file stores important information that persists across sessions.
     let mutable routeRef : (InboundMessage -> Async<unit>) =
         fun _ -> async { return () }   // placeholder; replaced below
 
+    // Cron send callback — same mutable ref pattern as sendRef (defined below).
+    // Replaced once sendRef is wired up.
+    let mutable cronSendRef : (OutboundMessage -> Async<unit>) =
+        fun msg -> async { printfn "\n[cron] %s" msg.Content }
+
     let cronSvc =
         CronService(config.WorkspacePath, fun job ->
             async {
-                let msg : InboundMessage = {
-                    Channel            = job.Channel
-                    Sender             = UserId "cron"
-                    Chat               = job.Chat
-                    Input              = ChatMessage (job.Task, [])
-                    Metadata           = Map.ofList [ "source", "cron"; "job_id", (let (TaskId v) = job.Id in v) ]
-                    SessionKeyOverride = None
+                // Send the cron job's task text directly to the target channel.
+                // Unlike normal messages that go through the agent loop, cron reminders
+                // are delivered as-is — the job.Task IS the reminder text.
+                let outbound : OutboundMessage = {
+                    Channel     = job.Channel
+                    Chat        = job.Chat
+                    Content     = job.Task
+                    ReplyTo     = None
+                    Attachments = []
+                    Buttons     = []
                 }
-                do! routeRef msg
+                do! cronSendRef outbound
             })
 
     let cronToolPair =
@@ -783,6 +791,13 @@ This file stores important information that persists across sessions.
             eprintfn "[pocket] Error: socket_name not configured. Use --config <path> with socket_name field."
             1
         else
+            // Validate pocket config via CLIPS rules (or F# fallback)
+            let configErrors = validatePocketConfig pocketCfg config ruleEngine
+            if not (List.isEmpty configErrors) then
+                eprintfn "[pocket] Config validation errors:"
+                for (field, msg) in configErrors do
+                    eprintfn "  [%s] %s" field msg
+
             eprintfn "[pocket] Connecting to HostBridge socket: %s" pocketCfg.SocketName
             let rpc = new PocketRpcClient(pocketCfg.SocketName)
             let sessionKeyRef : string option ref = ref None
