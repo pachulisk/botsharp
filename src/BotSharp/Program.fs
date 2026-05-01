@@ -543,7 +543,19 @@ This file stores important information that persists across sessions.
         Provider          = provider
         Tools             = allToolsMap
         LoadSession       = fun sid -> loadSession sid wp
-        PersistSession    = fun snap -> persistSession snap wp
+        PersistSession    = fun snap -> async {
+            // Step 1: JSONL (source of truth)
+            let! result = persistSession snap wp
+            // Step 2: SQLite sync (best-effort, non-blocking)
+            match result, openStateDb with
+            | Ok (), Some factory ->
+                try
+                    use conn = factory ()
+                    do! BotSharp.Infrastructure.Storage.StateDb.syncSession conn snap
+                with ex -> eprintfn "[StateDb] Session sync failed (non-fatal): %s" ex.Message
+            | _ -> ()
+            return result
+        }
         BuildSystemPrompt = buildSystemPrompt config.DisabledSkills config.SystemPromptAppend
         Config            = config
         StreamHook        = if isGateway then NoStreaming else cliStreamHook
