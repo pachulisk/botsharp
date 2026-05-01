@@ -63,6 +63,9 @@ let private deserializeEntry (line: string) : DreamEntry option =
     // Narrow to parse-specific exceptions only; non-parse exceptions propagate.
     with :? JsonException | :? FormatException -> None
 
+/// Parse a single JSONL line into a DreamEntry (public wrapper for StateDb rebuild).
+let parseDreamLine = deserializeEntry
+
 /// Append a single dream entry to the workspace dreams.jsonl file.
 let appendDreamEntry (workspacePath: string) (entry: DreamEntry) : Async<Result<unit, string>> =
     async {

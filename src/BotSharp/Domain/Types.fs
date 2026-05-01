@@ -754,6 +754,8 @@ type BotSharpConfig = {
     DisabledSkills       : string list             // skill names to exclude from loading (e.g. ["summarize"; "skill-creator"])
     SessionTtlMinutes    : int                     // idle minutes before auto-compact (0 = disabled)
     SessionCleanupDays   : int                     // delete idle session files older than N days (0 = disabled; Python: session_cleanup)
+    EnableSqliteIndex    : bool                    // enable SQLite derived index (default true)
+    SqliteRebuildOnError : bool                    // auto-rebuild SQLite if open fails (default true)
     Timezone             : string option           // IANA timezone for runtime context time display (None = system local)
     ExecTimeoutSeconds   : int                     // default timeout for shell exec tool (seconds; 0 = use tool default of 60)
     ExecAllowedEnvKeys   : string list             // env var allowlist for shell exec; [] = pass all (Python: exec.allowed_env_keys)
@@ -913,6 +915,8 @@ module BotSharpConfig =
         DisabledSkills       = []                 // empty = load all skills
         SessionTtlMinutes    = 0                  // 0 = auto-compact disabled
         SessionCleanupDays   = 0                  // 0 = session cleanup disabled
+        EnableSqliteIndex    = true               // SQLite index enabled by default
+        SqliteRebuildOnError = true               // auto-rebuild on open failure
         Timezone             = None               // None = system local timezone
         ExecTimeoutSeconds   = 0                  // 0 = use tool default (60 s)
         ExecAllowedEnvKeys   = []                 // [] = pass all env vars through (no restriction)

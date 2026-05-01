@@ -29,6 +29,7 @@ type AgentDependencies = {
     CurrentIteration  : int ref                    // written at start of each AwaitingLLM step; read by my tool
     RuleEngine        : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option
     FallbackProviders : LLMProvider list           // ordered fallback providers when primary fails
+    OpenStateDb       : (unit -> Microsoft.Data.Sqlite.SqliteConnection) option  // SQLite connection factory; None = disabled
 }
 
 let private liftStorage (m: Async<Result<'a, StorageError>>) : AsyncResult<'a, AgentError> =

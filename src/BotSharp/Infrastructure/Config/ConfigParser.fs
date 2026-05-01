@@ -803,4 +803,6 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             MoChat                 = mochatConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+            EnableSqliteIndex    = true
+            SqliteRebuildOnError = true
         }

@@ -35,6 +35,7 @@ let private stubDeps : AgentDependencies = {
     CurrentIteration  = ref 0
     RuleEngine        = None
     FallbackProviders = []
+    OpenStateDb       = None
 }
 
 /// No-op completion callback for tests.

@@ -77,7 +77,8 @@ let private makeDeps (provider: LLMProvider) (workspacePath: string) : AgentDepe
     LastTokenUsage    = ref None
     CurrentIteration  = ref 0
     RuleEngine        = None
-    FallbackProviders = [] }
+    FallbackProviders = []
+    OpenStateDb       = None }
 
 /// Helper: run test in a temp directory; clean up on exit.
 let private withTempDir (f: string -> unit) =

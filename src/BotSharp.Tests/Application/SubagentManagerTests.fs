@@ -41,6 +41,7 @@ let private stubDeps : AgentDependencies = {
     CurrentIteration  = ref 0
     RuleEngine        = None
     FallbackProviders = []
+    OpenStateDb       = None
 }
 
 let private noopComplete : OnSubagentComplete = fun _ -> async { return () }

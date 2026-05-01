@@ -459,6 +459,7 @@ This file stores important information that persists across sessions.
         CurrentIteration  = ref 0
         RuleEngine        = None   // subagents don't need rule engine
         FallbackProviders = fallbackProviders
+        OpenStateDb       = None
     }
 
     let subagentMgr =
@@ -468,6 +469,41 @@ This file stores important information that persists across sessions.
 
     let spawnToolPair =
         BotSharp.Infrastructure.Tools.SpawnTool.allTools subagentMgr
+
+    // ── SQLite state database (derived index, graceful fallback) ────────────
+    let openStateDb =
+        if config.EnableSqliteIndex then
+            try
+                let factory = BotSharp.Infrastructure.Storage.StateDb.init config.WorkspacePath |> Async.RunSynchronously
+                // Rebuild if DB was just created (no sessions yet)
+                let testConn = factory ()
+                let sessionCount = BotSharp.Infrastructure.Storage.StateDb.queryScalarInt testConn "SELECT COUNT(*) FROM sessions"
+                if sessionCount = 0 then
+                    let result = BotSharp.Infrastructure.Storage.StateDb.rebuildIndex config.WorkspacePath testConn |> Async.RunSynchronously
+                    eprintfn "[StateDb] Initial rebuild: %d sessions, %d consolidations" result.SessionsIndexed result.ConsolidationsIndexed
+                testConn.Close()
+                testConn.Dispose()
+                Some factory
+            with ex ->
+                eprintfn "[StateDb] SQLite init failed: %s" ex.Message
+                if config.SqliteRebuildOnError then
+                    try
+                        let dbPath = Path.Combine(config.WorkspacePath, "botsharp.sqlite")
+                        if File.Exists dbPath then File.Delete dbPath
+                        let factory = BotSharp.Infrastructure.Storage.StateDb.init config.WorkspacePath |> Async.RunSynchronously
+                        let testConn = factory ()
+                        let _ = BotSharp.Infrastructure.Storage.StateDb.rebuildIndex config.WorkspacePath testConn |> Async.RunSynchronously
+                        testConn.Close()
+                        testConn.Dispose()
+                        eprintfn "[StateDb] Rebuilt from scratch after error"
+                        Some factory
+                    with ex2 ->
+                        eprintfn "[StateDb] Rebuild also failed: %s. Running without SQLite." ex2.Message
+                        None
+                else None
+        else
+            eprintfn "[StateDb] SQLite index disabled by config"
+            None
 
     // ── CLIPS rule engine (graceful fallback if native lib not available) ────
     let ruleEngine =
@@ -517,6 +553,7 @@ This file stores important information that persists across sessions.
         CurrentIteration  = ref 0
         RuleEngine        = ruleEngine
         FallbackProviders = fallbackProviders
+        OpenStateDb       = openStateDb
     }
 
     // ── Wire up the system ────────────────────────────────────────────────────

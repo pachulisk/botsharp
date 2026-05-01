@@ -89,7 +89,8 @@ let private makeDepsWithTools
       LastTokenUsage    = ref None
       CurrentIteration  = ref 0
       RuleEngine        = None
-      FallbackProviders = [] }
+      FallbackProviders = []
+      OpenStateDb       = None }
 
 let private makeDeps (provider: LLMProvider) : AgentDependencies =
     makeDepsWithTools provider Map.empty
