@@ -798,6 +798,8 @@ type BotSharpConfig = {
     Telnet                 : TelnetChannelConfig option       // None = Telnet disabled
     Matrix                 : MatrixChannelConfig option       // None = Matrix disabled
     QQ                     : QQChannelConfig option           // None = QQ disabled
+    WhatsApp               : WhatsAppChannelConfig option     // None = WhatsApp disabled
+    MoChat                 : MoChatChannelConfig option       // None = MoChat disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -827,6 +829,21 @@ and DingTalkChannelConfig = {
     ClientSecret : string
     AllowFrom    : AllowList
     WebhookPort  : int
+}
+
+and WhatsAppChannelConfig = {
+    PhoneNumberId : string
+    AccessToken   : string
+    VerifyToken   : string
+    WebhookPort   : int
+    AllowFrom     : AllowList
+}
+
+and MoChatChannelConfig = {
+    BaseUrl      : string
+    ClawToken    : string
+    PollSeconds  : int
+    AllowFrom    : AllowList
 }
 
 and QQChannelConfig = {
@@ -943,6 +960,8 @@ module BotSharpConfig =
         Telnet             = None
         Matrix             = None
         QQ                 = None
+        WhatsApp           = None
+        MoChat             = None
         InterAgent         = None
         FallbackModels     = []
     }

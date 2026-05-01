@@ -574,6 +574,31 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(), cts.Token)
         (server, cts)
 
+    // ── WhatsApp server (start function, shared by both modes) ─────────────
+    let startWhatsAppServer (waCfg: WhatsAppChannelConfig) =
+        let waDeps = { deps with StreamHook = NoStreaming }
+        let waCoordinator = AgentCoordinator(waDeps)
+        let waConf : BotSharp.Infrastructure.Channels.WhatsAppChannel.WhatsAppConfig = {
+            PhoneNumberId = waCfg.PhoneNumberId; AccessToken = waCfg.AccessToken
+            VerifyToken = waCfg.VerifyToken; WebhookPort = waCfg.WebhookPort; AllowFrom = waCfg.AllowFrom
+        }
+        let server = BotSharp.Infrastructure.Channels.WhatsAppChannel.WhatsAppServer(waCoordinator, waConf, httpClient)
+        Async.Start(server.Start())
+        server
+
+    // ── MoChat server (start function, shared by both modes) ────────────────
+    let startMoChatServer (mcCfg: MoChatChannelConfig) =
+        let mcDeps = { deps with StreamHook = NoStreaming }
+        let mcCoordinator = AgentCoordinator(mcDeps)
+        let mcConf : BotSharp.Infrastructure.Channels.MoChatChannel.MoChatConfig = {
+            BaseUrl = mcCfg.BaseUrl; ClawToken = mcCfg.ClawToken
+            PollSeconds = mcCfg.PollSeconds; AllowFrom = mcCfg.AllowFrom
+        }
+        let server = BotSharp.Infrastructure.Channels.MoChatChannel.MoChatServer(mcCoordinator, mcConf, httpClient)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── QQ server (start function, shared by both modes) ───────────────────
     let startQQServer (qqCfg: QQChannelConfig) =
         let qqDeps = { deps with StreamHook = NoStreaming }
@@ -783,6 +808,18 @@ This file stores important information that persists across sessions.
             | Some qqCfg -> Some (startQQServer qqCfg)
             | None -> None
 
+        // WhatsApp: start if configured
+        let waServerOpt =
+            match config.WhatsApp with
+            | Some waCfg -> Some (startWhatsAppServer waCfg)
+            | None -> None
+
+        // MoChat: start if configured
+        let mcServerOpt =
+            match config.MoChat with
+            | Some mcCfg -> Some (startMoChatServer mcCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -841,6 +878,8 @@ This file stores important information that persists across sessions.
         tnServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         mxServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         qqServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        waServerOpt |> Option.iter (fun s -> s.Stop())
+        mcServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -929,6 +968,18 @@ This file stores important information that persists across sessions.
         let qqServerOpt =
             match config.QQ with
             | Some qqCfg -> Some (startQQServer qqCfg)
+            | None -> None
+
+        // WhatsApp: start if configured
+        let waServerOpt =
+            match config.WhatsApp with
+            | Some waCfg -> Some (startWhatsAppServer waCfg)
+            | None -> None
+
+        // MoChat: start if configured
+        let mcServerOpt =
+            match config.MoChat with
+            | Some mcCfg -> Some (startMoChatServer mcCfg)
             | None -> None
 
         // Inter-agent: start if configured

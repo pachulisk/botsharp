@@ -615,6 +615,43 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 } : EmailChannelConfig option
             | _ -> None
 
+    // ── Parse optional [whatsapp] section ────────────────────────────────────
+    let whatsappConfig =
+        match tryGetObject "whatsapp" el with
+        | None -> None
+        | Some wa ->
+            match tryGetString "phone_number_id" wa, tryGetString "access_token" wa with
+            | Some phoneId, Some token ->
+                let verifyToken = match tryGetString "verify_token" wa with Some v -> v | None -> ""
+                let port = match tryGetInt "webhook_port" wa with Some p -> p | None -> 19802
+                let allowFrom =
+                    match tryGetArray "allow_from" wa with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                Some { PhoneNumberId = phoneId; AccessToken = token; VerifyToken = verifyToken; WebhookPort = port; AllowFrom = allowFrom } : WhatsAppChannelConfig option
+            | _ -> None
+
+    // ── Parse optional [mochat] section ───────────────────────────────────────
+    let mochatConfig =
+        match tryGetObject "mochat" el with
+        | None -> None
+        | Some mc ->
+            match tryGetString "base_url" mc, tryGetString "claw_token" mc with
+            | Some baseUrl, Some token ->
+                let pollSec = match tryGetInt "poll_interval_seconds" mc with Some s -> s | None -> 5
+                let allowFrom =
+                    match tryGetArray "allow_from" mc with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                Some { BaseUrl = baseUrl; ClawToken = token; PollSeconds = pollSec; AllowFrom = allowFrom } : MoChatChannelConfig option
+            | _ -> None
+
     // ── Parse optional [qq] section ──────────────────────────────────────────
     let qqConfig =
         match tryGetObject "qq" el with
@@ -757,6 +794,8 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             Telnet                 = telnetConfig
             Matrix                 = matrixConfig
             QQ                     = qqConfig
+            WhatsApp               = whatsappConfig
+            MoChat                 = mochatConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

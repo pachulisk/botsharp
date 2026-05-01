@@ -106,6 +106,12 @@
     <!-- QQ channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/QQChannel.fs" />
 
+    <!-- WhatsApp channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/WhatsAppChannel.fs" />
+
+    <!-- MoChat channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/MoChatChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 
