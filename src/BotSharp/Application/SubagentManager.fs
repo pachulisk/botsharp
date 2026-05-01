@@ -108,9 +108,12 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             let! result = runAgentLoop inbound subDeps None
             let finalResult =
                 match result with
-                | Result.Ok (text, _) ->
-                    // Track if subagent hit its iteration budget
-                    if text.Contains("stopped after") then
+                | Result.Ok (text, snap) ->
+                    // Detect budget exhaustion by comparing iteration count vs max.
+                    // No string matching — use structured data from the snapshot.
+                    let msgCount = SessionSnapshot.messageCount snap
+                    let hitBudget = msgCount >= subDeps.Config.MaxIterations * 2  // rough: each iter = ~2 messages (call + result)
+                    if hitBudget then
                         baseDeps.RuleEngine |> Option.iter (fun engine ->
                             BotSharp.Infrastructure.Rules.RuleEngine.assertSubagentBudgetExhausted
                                 engine taskId subDeps.Config.MaxIterations

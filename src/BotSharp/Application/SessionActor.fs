@@ -145,7 +145,7 @@ let createSessionActor
                             let result = BotSharp.Infrastructure.Rules.RuleEngine.shouldConsolidateBeforeClear engine
                             BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
                             result
-                        | None -> unconsolidated > 20   // fallback: same threshold without CLIPS
+                        | None -> unconsolidated > deps'.Config.MemoryWindowSize   // fallback: use config threshold
                     if shouldArchiveFirst then
                         match lastSnap with
                         | Some snap ->
