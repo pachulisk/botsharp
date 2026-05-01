@@ -878,6 +878,7 @@ let private pollLoop
                 else (updates |> List.map (fun u -> u.Id) |> List.max) + 1
 
             for update in updates do
+                // Handle regular messages
                 match update.Message with
                 | null -> ()
                 | msg ->
@@ -887,6 +888,75 @@ let private pollLoop
                                     mediaGroups botUsername switchModel listModels ct msg
                         with ex ->
                             eprintfn "[Telegram] Unhandled error: %s" ex.Message
+                    }, ct)
+
+                // Handle InlineKeyboard button callbacks
+                match update.CallbackQuery with
+                | null -> ()
+                | cbq ->
+                    Async.Start(async {
+                        try
+                            // Acknowledge the callback (removes loading indicator)
+                            do! bot.AnswerCallbackQuery(cbq.Id) |> Async.AwaitTask |> Async.Ignore
+
+                            let data = cbq.Data |> Option.ofObj |> Option.defaultValue ""
+                            let chatId = cbq.Message |> Option.ofObj |> Option.map (fun m -> m.Chat.Id) |> Option.defaultValue 0L
+
+                            if data.StartsWith("model:") && chatId <> 0L then
+                                let modelLine = data.Substring(6)
+                                // Extract provider ID from the button label (format: "(providerId)" or "model (providerId) ✓")
+                                // For now, we need the user to specify the full model name
+                                // Parse: the button text may be "  (deepseek)" or "  mimo-v2.5-pro (xiaomi-mimo) ✓"
+                                // Extract the provider part between parentheses
+                                let providerIdOpt =
+                                    let idx1 = modelLine.IndexOf('(')
+                                    let idx2 = modelLine.IndexOf(')')
+                                    if idx1 >= 0 && idx2 > idx1 then
+                                        Some (modelLine.Substring(idx1 + 1, idx2 - idx1 - 1))
+                                    else None
+
+                                match providerIdOpt with
+                                | None ->
+                                    do! bot.SendMessage(TgChatId(chatId), "Could not parse model selection.")
+                                        |> Async.AwaitTask |> Async.Ignore
+                                | Some providerId ->
+                                    // Use the current default model for this provider, or the provider ID as model name
+                                    let modelName =
+                                        // If button shows current model with ✓, use it
+                                        if modelLine.Contains("✓") then
+                                            coordinator.Config.DefaultModel
+                                        else
+                                            // For other providers, we need to figure out a default model
+                                            // Use a sensible default based on provider
+                                            match providerId with
+                                            | "openai" -> "gpt-4o"
+                                            | "anthropic" -> "claude-sonnet-4-6"
+                                            | "deepseek" -> "deepseek-v4-pro"
+                                            | "xiaomi-mimo" -> "mimo-v2.5-pro"
+                                            | "gemini" -> "gemini-2.0-flash"
+                                            | "groq" -> "llama-3.3-70b"
+                                            | "moonshot" -> "moonshot-v1-128k"
+                                            | other -> other
+
+                                    let! result = switchModel modelName
+                                    match result with
+                                    | Ok (model, provider) ->
+                                        // Edit the original message to show confirmation
+                                        match cbq.Message with
+                                        | null -> ()
+                                        | origMsg ->
+                                            try
+                                                do! bot.EditMessageText(TgChatId(chatId), origMsg.MessageId,
+                                                        $"✅ Switched to {model} ({provider})\nConfig saved. Send /new to start fresh.")
+                                                    |> Async.AwaitTask |> Async.Ignore
+                                            with _ ->
+                                                do! bot.SendMessage(TgChatId(chatId), $"✅ Switched to {model} ({provider})\nConfig saved.")
+                                                    |> Async.AwaitTask |> Async.Ignore
+                                    | Error msg ->
+                                        do! bot.SendMessage(TgChatId(chatId), $"❌ {msg}")
+                                            |> Async.AwaitTask |> Async.Ignore
+                        with ex ->
+                            eprintfn "[Telegram] CallbackQuery error: %s" ex.Message
                     }, ct)
 
             return! loop nextOffset
@@ -928,6 +998,21 @@ let startTelegram
             | u    -> u
         printfn "[Telegram] Bot @%s is running." botUsername
         onBotReady bot tgCfg
+
+        // Register bot commands in Telegram's "/" menu
+        let commands = [|
+            Telegram.Bot.Types.BotCommand(Command = "new",           Description = "Start new conversation")
+            Telegram.Bot.Types.BotCommand(Command = "model",         Description = "Switch LLM model")
+            Telegram.Bot.Types.BotCommand(Command = "status",        Description = "Show configuration")
+            Telegram.Bot.Types.BotCommand(Command = "history",       Description = "Show recent messages")
+            Telegram.Bot.Types.BotCommand(Command = "clear",         Description = "Clear history")
+            Telegram.Bot.Types.BotCommand(Command = "dream",         Description = "Consolidate memory")
+            Telegram.Bot.Types.BotCommand(Command = "dream_log",     Description = "List dream entries")
+            Telegram.Bot.Types.BotCommand(Command = "dream_restore", Description = "Restore from dream")
+            Telegram.Bot.Types.BotCommand(Command = "help",          Description = "Show all commands")
+        |]
+        do! bot.SetMyCommands(commands) |> Async.AwaitTask |> Async.Ignore
+        printfn "[Telegram] Bot commands registered in menu"
 
         let coordinator = TelegramCoordinator(baseDeps, bot, tgCfg)
         let mediaGroups = ConcurrentDictionary<string, MediaGroupState>()
