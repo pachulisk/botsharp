@@ -90,7 +90,8 @@ let private makeDepsWithTools
       CurrentIteration  = ref 0
       RuleEngine        = None
       FallbackProviders = []
-      OpenStateDb       = None }
+      OpenStateDb       = None
+      TokenTracker      = ref None }
 
 let private makeDeps (provider: LLMProvider) : AgentDependencies =
     makeDepsWithTools provider Map.empty

@@ -30,6 +30,7 @@ type AgentDependencies = {
     RuleEngine        : BotSharp.Infrastructure.Rules.RuleEngine.RuleEngine option
     FallbackProviders : LLMProvider list           // ordered fallback providers when primary fails
     OpenStateDb       : (unit -> Microsoft.Data.Sqlite.SqliteConnection) option  // SQLite connection factory; None = disabled
+    TokenTracker      : TokenTracker option ref   // None = ContextWindowTokens=0, no tracking
 }
 
 let private liftStorage (m: Async<Result<'a, StorageError>>) : AsyncResult<'a, AgentError> =
@@ -407,7 +408,13 @@ let applyToolResultBudget (maxChars: int) (messages: Message list) : Message lis
             | other -> other)
 
 /// Rough token estimate via character count heuristic (4 chars ≈ 1 token).
-let estimateTokens (text: string) : int = max 1 (text.Length / 4)
+/// Token estimation based on UTF-8 byte count.
+/// Ratio: 1 token ≈ 4 UTF-8 bytes (aligned with Codex truncate.rs APPROX_BYTES_PER_TOKEN).
+/// Ceiling division: (bytes + 3) / 4 (aligned with Codex approx_token_count).
+/// Fixes CJK underestimation: "你好世界" = 12 UTF-8 bytes → 3 tokens (was 1 with UTF-16).
+let estimateTokens (text: string) : int =
+    let byteCount = System.Text.Encoding.UTF8.GetByteCount(text)
+    max 1 ((byteCount + 3) / 4)
 
 /// Estimate the token cost of a single message.
 let messageTokens (msg: Message) : int =
@@ -417,11 +424,19 @@ let messageTokens (msg: Message) : int =
     | AssistantMessage (s, rcOpt) ->
         let rcTokens = rcOpt |> Option.map estimateTokens |> Option.defaultValue 0
         estimateTokens s + rcTokens + 4
-    | ToolCallMessage (calls, _) ->
-        calls |> NonEmptyList.toList
-        |> List.sumBy (fun c ->
-            let args = c.Arguments |> Map.toList |> List.sumBy (fun (k,v) -> k.Length + 10 + v.ToString().Length)
-            4 + args)
+    | ToolCallMessage (calls, rcOpt2) ->
+        let rcTokens2 = rcOpt2 |> Option.map estimateTokens |> Option.defaultValue 0
+        let callTokens =
+            calls |> NonEmptyList.toList
+            |> List.sumBy (fun c ->
+                let argsBytes =
+                    c.Arguments |> Map.toList
+                    |> List.sumBy (fun (k, v) ->
+                        let kb = System.Text.Encoding.UTF8.GetByteCount(k)
+                        let vb = System.Text.Encoding.UTF8.GetByteCount(v.ToString())
+                        kb + 10 + vb)
+                4 + argsBytes / 4)
+        rcTokens2 + callTokens
     | ToolResultMessage (_, _, s) -> estimateTokens s + 4
 
 /// Trim messages to fit within the context window budget.
@@ -952,6 +967,10 @@ let rec private iterate
 
             // Record token usage for the my tool's _last_usage key.
             deps.LastTokenUsage.Value <- Some response.Usage
+            // Update TokenTracker with API-reported usage
+            match deps.TokenTracker.Value with
+            | Some tracker -> deps.TokenTracker.Value <- Some (TokenTracker.recordApiUsage response.Usage tracker)
+            | None -> ()
 
             // Assert LLM response fact into rule engine.
             match deps.RuleEngine with

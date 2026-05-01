@@ -40,7 +40,8 @@ let private mkDeps
       CurrentIteration  = ref 0
       RuleEngine        = None
       FallbackProviders = []
-      OpenStateDb       = None }
+      OpenStateDb       = None
+      TokenTracker      = ref None }
 
 [<Fact>]
 let ``AutoCompactService Start/Stop with ttl=0 does not crash`` () =

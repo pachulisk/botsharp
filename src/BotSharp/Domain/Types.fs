@@ -208,6 +208,49 @@ module TokenUsage =
             else ""
         sprintf "%d in / %d out%s" u.PromptTokens u.CompletionTokens cacheStr
 
+/// Cross-turn token usage tracker (lives in SessionActor memory, not persisted).
+/// Aligned with Codex TokenUsageInfo (protocol.rs:2044-2050).
+type TokenTracker = {
+    LastUsage        : TokenUsage option
+    TotalUsage       : TokenUsage
+    ContextWindow    : int
+    EstimatedPending : int
+}
+
+module TokenTracker =
+    let empty (contextWindow: int) : TokenTracker =
+        { LastUsage = None; TotalUsage = { PromptTokens = 0; CompletionTokens = 0; CachedTokens = 0 }
+          ContextWindow = contextWindow; EstimatedPending = 0 }
+
+    let recordApiUsage (usage: TokenUsage) (t: TokenTracker) : TokenTracker =
+        { t with
+            LastUsage = Some usage
+            TotalUsage = { PromptTokens = t.TotalUsage.PromptTokens + usage.PromptTokens
+                           CompletionTokens = t.TotalUsage.CompletionTokens + usage.CompletionTokens
+                           CachedTokens = t.TotalUsage.CachedTokens + usage.CachedTokens }
+            EstimatedPending = 0 }
+
+    let addPendingEstimate (tokens: int) (t: TokenTracker) : TokenTracker =
+        { t with EstimatedPending = t.EstimatedPending + tokens }
+
+    let currentUsageEstimate (t: TokenTracker) : int =
+        match t.LastUsage with
+        | Some last -> last.PromptTokens + last.CompletionTokens + t.EstimatedPending
+        | None -> t.EstimatedPending
+
+    let contextRemainingPercent (t: TokenTracker) : int =
+        if t.ContextWindow <= 0 then 100
+        else
+            let baselineTokens = 8000
+            let effectiveWindow = max 1 (t.ContextWindow - baselineTokens)
+            let used = currentUsageEstimate t
+            let remaining = max 0 (effectiveWindow - used)
+            min 100 (remaining * 100 / effectiveWindow)
+
+    let shouldCompactByTokens (t: TokenTracker) : bool =
+        if t.ContextWindow <= 0 then false
+        else currentUsageEstimate t >= t.ContextWindow * 80 / 100
+
 type LLMResponseBody =
     | TextOnly      of content: string
     | WithToolCalls of content: string option * calls: NonEmptyList<ToolCall>

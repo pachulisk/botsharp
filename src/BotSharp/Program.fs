@@ -460,6 +460,7 @@ This file stores important information that persists across sessions.
         RuleEngine        = None   // subagents don't need rule engine
         FallbackProviders = fallbackProviders
         OpenStateDb       = None
+        TokenTracker      = ref None
     }
 
     let subagentMgr =
@@ -577,6 +578,7 @@ This file stores important information that persists across sessions.
         RuleEngine        = ruleEngine
         FallbackProviders = fallbackProviders
         OpenStateDb       = openStateDb
+        TokenTracker      = ref (if config.ContextWindowTokens > 0 then Some (TokenTracker.empty config.ContextWindowTokens) else None)
     }
 
     // ── Wire up the system ────────────────────────────────────────────────────
