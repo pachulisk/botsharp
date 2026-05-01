@@ -1,5 +1,7 @@
 module BotSharp.Infrastructure.Channels.MoChatChannel
 
+#nowarn "3261" // Nullness interop — C# libs return 'string | null' consumed as 'string'
+
 open System
 open System.Collections.Generic
 open System.Net.Http

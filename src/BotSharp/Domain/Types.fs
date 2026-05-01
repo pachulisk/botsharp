@@ -627,8 +627,9 @@ type McpCapabilities = {
 }
 
 type McpServerConfig =
-    | StdioServer of command: string * args: string list * env: Map<string, string>
-    | HttpServer  of url: Uri * headers: Map<string, string>
+    | StdioServer      of command: string * args: string list * env: Map<string, string>
+    | HttpServer       of url: Uri * headers: Map<string, string>
+    | UnixSocketServer of socketPath: string
 
 /// Per-MCP-server entry: transport config plus shared metadata.
 /// `ToolTimeout` — per-call timeout in seconds (Python: tool_timeout; default 30).

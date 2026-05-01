@@ -291,6 +291,9 @@ let serializeConfig (cfg: BotSharpConfig) : string =
                     w.WriteStartObject("headers")
                     for h in headers do w.WriteString(h.Key, h.Value)
                     w.WriteEndObject()
+            | UnixSocketServer (socketPath) ->
+                w.WriteString("type", "unix")
+                w.WriteString("socket_path", socketPath)
             // tool_timeout (omit when default — 30 s)
             if entry.ToolTimeout <> 30 then
                 w.WriteNumber("tool_timeout", entry.ToolTimeout)

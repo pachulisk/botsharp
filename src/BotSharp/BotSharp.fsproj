@@ -115,6 +115,9 @@
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 
+    <!-- Pocket channel (botx-pocket HostBridge integration via Unix domain socket) -->
+    <Compile Include="Infrastructure/Channels/PocketChannel.fs" />
+
     <!-- Message bus (after Application layer — depends on AgentCoordinator) -->
     <Compile Include="Infrastructure/MessageBus.fs" />
 

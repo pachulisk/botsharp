@@ -3,6 +3,7 @@ module BotSharp.Program
 open System
 open System.IO
 open System.Net.Http
+open System.Text.Json
 open BotSharp.Domain.Types
 open BotSharp.Infrastructure.Config.ConfigLoader
 open BotSharp.Infrastructure.Providers.ProviderRegistry
@@ -18,6 +19,7 @@ open BotSharp.Infrastructure.Cron.CronService
 open BotSharp.Application.HeartbeatService
 open BotSharp.Infrastructure.Skills.DefaultSkills
 open BotSharp.Infrastructure.Channels.CliChannel
+open BotSharp.Infrastructure.Channels.PocketChannel
 open BotSharp.Infrastructure.Channels.OnboardingWizard
 open BotSharp.Infrastructure.Channels.TelegramChannel
 open BotSharp.Infrastructure.Channels.ApiChannel
@@ -75,6 +77,8 @@ let main argv =
         |> Option.orElse (findFlag "-p" argv)
         |> Option.bind (fun s -> match Int32.TryParse(s) with true, n -> Some n | _ -> None)
     let verbose = hasFlag "--verbose" argv || hasFlag "-v" argv
+    let isPocket = hasFlag "--pocket" argv
+    let pocketConfigFlag = findFlag "--config" argv
 
     // ── Load or bootstrap configuration ──────────────────────────────────────
     // If the config file does not yet exist, run the first-run wizard so the
@@ -731,10 +735,77 @@ This file stores important information that persists across sessions.
     sessionCleanupSvc.Start()
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Mode dispatch: gateway (headless) vs CLI (interactive)
+    // Mode dispatch: pocket vs gateway (headless) vs CLI (interactive)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    if isGateway then
+    if isPocket then
+        // ── Pocket mode ─────────────────────────────────────────────────────
+        // Connects to botx-pocket HostBridge via Unix domain socket.
+        // Replaces botx as primary agent inside the pocket mobile container.
+        let pocketCfg =
+            match pocketConfigFlag with
+            | Some path ->
+                try
+                    let text = File.ReadAllText(path)
+                    use doc = JsonDocument.Parse(text)
+                    let el : JsonElement = doc.RootElement
+                    let tryStr (name: string) =
+                        match el.TryGetProperty(name) with
+                        | true, v when v.ValueKind = JsonValueKind.String -> v.GetString() |> Option.ofObj
+                        | _ -> None
+                    let tryInt (name: string) =
+                        match el.TryGetProperty(name) with
+                        | true, v when v.ValueKind = JsonValueKind.Number -> Some (v.GetInt32())
+                        | _ -> None
+                    let tryArr (name: string) =
+                        match el.TryGetProperty(name) with
+                        | true, v when v.ValueKind = JsonValueKind.Array ->
+                            v.EnumerateArray()
+                            |> Seq.choose (fun (e: JsonElement) ->
+                                if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                            |> Seq.toList |> Some
+                        | _ -> None
+                    { PocketChannelConfig.defaults with
+                        SocketName    = tryStr "socket_name"    |> Option.defaultValue PocketChannelConfig.defaults.SocketName
+                        AgentId       = tryStr "agent_id"       |> Option.defaultValue PocketChannelConfig.defaults.AgentId
+                        DisplayName   = tryStr "display_name"   |> Option.defaultValue PocketChannelConfig.defaults.DisplayName
+                        PollTimeoutMs = tryInt "poll_timeout_ms" |> Option.defaultValue PocketChannelConfig.defaults.PollTimeoutMs
+                        Capabilities  = tryArr "capabilities"   |> Option.defaultValue PocketChannelConfig.defaults.Capabilities
+                    }
+                with ex ->
+                    eprintfn "[pocket] Failed to load config from '%s': %s. Using defaults." path ex.Message
+                    PocketChannelConfig.defaults
+            | None ->
+                PocketChannelConfig.defaults
+
+        if pocketCfg.SocketName = "" then
+            eprintfn "[pocket] Error: socket_name not configured. Use --config <path> with socket_name field."
+            1
+        else
+            eprintfn "[pocket] Connecting to HostBridge socket: %s" pocketCfg.SocketName
+            let rpc = new PocketRpcClient(pocketCfg.SocketName)
+            let sessionKeyRef : string option ref = ref None
+            let pocketDeps = {
+                deps with
+                    StreamHook = pocketStreamHook rpc pocketCfg.AgentId sessionKeyRef
+                    Hook       = pocketAgentHook rpc config.SendToolHints
+            }
+            let pocketCoordinator = AgentCoordinator(pocketDeps)
+
+            rpc.ChatRegister(pocketCfg.AgentId, pocketCfg.DisplayName, pocketCfg.Capabilities)
+            |> Async.RunSynchronously
+            eprintfn "[pocket] Registered as '%s'. Entering poll loop." pocketCfg.AgentId
+
+            let port = createPocketPort rpc pocketCfg sessionKeyRef
+            startPocket pocketCoordinator port rpc |> Async.RunSynchronously
+
+            rpc.Dispose()
+            autoCompactSvc.Stop()
+            sessionCleanupSvc.Stop()
+            disposeMcp ()
+            0
+
+    elif isGateway then
         // ── Gateway mode ─────────────────────────────────────────────────────
         // Headless server — no stdin, no CLI loop.
         // Starts API + WS + Telegram channels, blocks until Ctrl-C.

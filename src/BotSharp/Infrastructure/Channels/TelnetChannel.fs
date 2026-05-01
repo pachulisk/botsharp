@@ -1,5 +1,7 @@
 module BotSharp.Infrastructure.Channels.TelnetChannel
 
+#nowarn "3261" // Nullness interop — C# libs return nullable types consumed as non-null
+
 open System
 open System.IO
 open System.Net
@@ -68,7 +70,6 @@ type TelnetServer(coordinator: AgentCoordinator, config: TelnetConfig) =
                                 do! writer.WriteLineAsync(text) |> Async.AwaitTask
                         | Result.Error e ->
                             do! writer.WriteLineAsync($"Error: {e}") |> Async.AwaitTask
-                        | _ -> ()
                         do! writer.WriteAsync("\nyou> ") |> Async.AwaitTask
             with
             | :? IOException -> ()

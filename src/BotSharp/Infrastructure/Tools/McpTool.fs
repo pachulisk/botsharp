@@ -23,6 +23,8 @@ open BotSharp.Infrastructure.Providers.SseParser
 // Transports:
 //   • Stdio — spawn process; newline-delimited JSON-RPC on stdin/stdout
 //   • HTTP  — POST JSON-RPC; accept application/json or text/event-stream
+//   • Unix  — connect to Unix domain socket; newline-delimited JSON-RPC
+//             Supports abstract namespace (prefix with @) for Android/Linux
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── JSON building ────────────────────────────────────────────────────────────
@@ -309,6 +311,55 @@ let private createStdioTransport
     with ex ->
         Error ex.Message
 
+// ── Unix domain socket transport ──────────────────────────────────────────────
+
+let private createUnixSocketTransport
+    (socketPath : string)
+    : Result<McpTransport, string> =
+    try
+        let socket = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.Unix,
+            System.Net.Sockets.SocketType.Stream,
+            System.Net.Sockets.ProtocolType.Unspecified)
+        let effectivePath =
+            if socketPath.StartsWith("@") then "\x00" + socketPath.[1..]
+            else socketPath
+        let endpoint = System.Net.Sockets.UnixDomainSocketEndPoint(effectivePath)
+        socket.Connect(endpoint)
+        let stream = new System.Net.Sockets.NetworkStream(socket, ownsSocket = true)
+        let reader = new StreamReader(stream, Encoding.UTF8)
+        let writer = new StreamWriter(stream, Encoding.UTF8, NewLine = "\n")
+        let sem    = new System.Threading.SemaphoreSlim(1, 1)
+
+        let request (line: string) = async {
+            do! sem.WaitAsync() |> Async.AwaitTask
+            try
+                do! writer.WriteLineAsync(line) |> Async.AwaitTask
+                do! writer.FlushAsync() |> Async.AwaitTask
+                return! readNextResponse reader
+            finally
+                sem.Release() |> ignore
+        }
+
+        let notify (line: string) = async {
+            do! sem.WaitAsync() |> Async.AwaitTask
+            try
+                do! writer.WriteLineAsync(line) |> Async.AwaitTask
+                do! writer.FlushAsync() |> Async.AwaitTask
+            finally
+                sem.Release() |> ignore
+        }
+
+        let dispose () =
+            try writer.Dispose() with _ -> ()
+            try reader.Dispose() with _ -> ()
+            try stream.Dispose() with _ -> ()
+            sem.Dispose()
+
+        Ok { Request = request; Notify = notify; Dispose = dispose }
+    with ex ->
+        Error $"Unix socket connection failed ({socketPath}): {ex.Message}"
+
 // ── HTTP transport ────────────────────────────────────────────────────────────
 
 let private createHttpTransport
@@ -466,8 +517,9 @@ let connectAllMcpServers
             let entry      = kv.Value
             let transportResult =
                 match entry.Connection with
-                | StdioServer (cmd, args, env) -> createStdioTransport cmd args env
-                | HttpServer  (url, headers)   -> Ok (createHttpTransport httpClient url headers)
+                | StdioServer      (cmd, args, env) -> createStdioTransport cmd args env
+                | HttpServer       (url, headers)   -> Ok (createHttpTransport httpClient url headers)
+                | UnixSocketServer (socketPath)     -> createUnixSocketTransport socketPath
             match transportResult with
             | Error e ->
                 eprintfn "[mcp] server '%s': failed to create transport: %s" serverName e

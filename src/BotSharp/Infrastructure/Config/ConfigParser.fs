@@ -105,9 +105,14 @@ let private parseMcpServer (name: string) (el: JsonElement) : Result<string * Mc
                         |> Option.defaultValue Map.empty
                     return HttpServer(url, headers)
                 }
+            | "unix" ->
+                result {
+                    let! socketPath = requireString "socket_path" el
+                    return UnixSocketServer(socketPath)
+                }
             | other ->
                 Error (SchemaError ($"mcp_servers.{name}.type",
-                                    $"unknown type '{other}', expected 'stdio' or 'http'"))
+                                    $"unknown type '{other}', expected 'stdio', 'http', or 'unix'"))
         return (name, { Connection = connection; ToolTimeout = toolTimeout; EnabledTools = enabledTools })
     }
 

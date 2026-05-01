@@ -1,5 +1,7 @@
 module BotSharp.Infrastructure.Channels.EmailChannel
 
+#nowarn "3261" // Nullness interop — C# libs (MailKit) return nullable types consumed as non-null
+
 open System
 open System.Collections.Generic
 open System.Threading
@@ -67,7 +69,7 @@ type EmailServer(coordinator: AgentCoordinator, config: EmailConfig) =
             let sslOpt = if config.SmtpUseTls then SecureSocketOptions.StartTls else SecureSocketOptions.Auto
             smtp.Connect(config.SmtpHost, config.SmtpPort, sslOpt)
             smtp.Authenticate(config.Username, config.Password)
-            smtp.Send(msg)
+            smtp.Send(msg) |> ignore
             smtp.Disconnect(true)
         with ex ->
             eprintfn "[Email] SMTP send error to %s: %s" toAddr ex.Message
