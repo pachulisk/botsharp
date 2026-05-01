@@ -542,7 +542,9 @@ This file stores important information that persists across sessions.
             if isActive then $"  {config.DefaultModel} ({pid}) ✓"
             else $"  ({pid})")
 
-    // Wire model switch callback
+    // Wire model switch callback.
+    // Single source of truth: config.json → eval → immutable deps → coordinator.
+    // /model writes config.json, then re-evals the entire chain.
     switchModelRef <- fun modelName -> async {
         // 1. Detect provider for the new model
         match detectProvider modelName with
@@ -552,15 +554,36 @@ This file stores important information that persists across sessions.
             match resolveApiKey spec config with
             | None -> return Error $"No API key configured for provider '{spec.Id}'."
             | Some _ ->
-                // 3. Update config.json
+                // 3. Update config.json (single source of truth)
                 let configPath = expandPath defaultConfigPath
-                let newConfig = { config with DefaultModel = modelName; DefaultProvider = spec.Id }
+                let ctxWindow = let cw = resolveContextWindow modelName in if cw > 0 then cw else config.ContextWindowTokens
+                let newConfig = { config with DefaultModel = modelName; DefaultProvider = spec.Id; ContextWindowTokens = ctxWindow }
                 let! saveResult = BotSharp.Infrastructure.Config.ConfigWriter.saveConfig configPath newConfig
                 match saveResult with
                 | Error msg -> return Error $"Failed to save config: {msg}"
                 | Ok () ->
-                    eprintfn "[/model] Switched to %s (provider: %s), saved to config.json" modelName spec.Id
-                    return Ok (modelName, spec.Id)
+                    // 4. Re-eval: resolve new provider from config (immutable)
+                    match resolve httpClient modelName newConfig with
+                    | None -> return Error $"Failed to resolve provider for '{modelName}' after config update."
+                    | Some newProvider ->
+                        // 5. Rebuild immutable deps with new provider + config
+                        let newFallbacks =
+                            newConfig.FallbackModels
+                            |> List.choose (fun m -> resolve httpClient m newConfig)
+                            |> List.filter (fun p -> p.Id <> newProvider.Id)
+                        let newDeps = { deps with Provider = newProvider; Config = newConfig; FallbackProviders = newFallbacks }
+                        // 6. Rebuild coordinator and update routing refs
+                        let newCoordinator = AgentCoordinator(newDeps)
+                        routeRef <- fun msg -> async { let! _ = newCoordinator.Route msg in return () }
+                        cronRouteRef <- fun msg -> newCoordinator.Route msg
+                        // 7. CLIPS: assert model-switch fact for validation
+                        ruleEngine |> Option.iter (fun engine ->
+                            BotSharp.Infrastructure.Rules.RuleEngine.assertConfigIssue
+                                engine "model_switch" "info" $"Switched to {modelName} ({spec.Id})"
+                            BotSharp.Infrastructure.Rules.RuleEngine.evaluate engine |> ignore
+                            BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine)
+                        eprintfn "[/model] Hot-switched to %s (provider: %s). New coordinator active." modelName spec.Id
+                        return Ok (modelName, spec.Id)
     }
 
     // ── API server (start function, shared by both modes) ─────────────────────

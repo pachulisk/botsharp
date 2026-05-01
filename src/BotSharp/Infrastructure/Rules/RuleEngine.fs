@@ -152,6 +152,14 @@ let private builtinRules = """
   =>
   (printout t "[RuleEngine] Subagent " ?tid " exhausted " ?n " iterations" crlf))
 
+;; Model switch validation — log when config model changes at runtime.
+;; The config-issue with cfg_field "model_switch" is asserted after /model.
+;; This rule provides observability into hot-switch events.
+(defrule model-switch-applied
+  (config-issue (cfg_field "model_switch") (severity "info") (message ?m))
+  =>
+  (printout t "[RuleEngine] " ?m crlf))
+
 ;; Workspace violation: agent tried to access files outside workspace.
 ;; Stop immediately — continuing lets the agent try to bypass the restriction.
 ;; (Port of nanobot#3493)
