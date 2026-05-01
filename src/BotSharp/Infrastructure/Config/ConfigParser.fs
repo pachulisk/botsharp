@@ -615,6 +615,21 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 } : EmailChannelConfig option
             | _ -> None
 
+    // ── Parse optional [telnet] section ──────────────────────────────────────
+    let telnetConfig =
+        match tryGetObject "telnet" el with
+        | None -> None
+        | Some tn ->
+            let port = match tryGetInt "port" tn with Some p -> p | None -> 2323
+            let allowFrom =
+                match tryGetArray "allow_from" tn with
+                | None -> AnyoneAllowed
+                | Some elems ->
+                    let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                    if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                    else AllowedSet (Set.ofList ids)
+            Some { Port = port; AllowFrom = allowFrom } : TelnetChannelConfig option
+
     let interAgentConfig =
         match tryGetObject "inter_agent" el with
         | None -> None
@@ -704,6 +719,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             Feishu                 = feishuConfig
             DingTalk               = dingtalkConfig
             Email                  = emailConfig
+            Telnet                 = telnetConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

@@ -574,6 +574,18 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(), cts.Token)
         (server, cts)
 
+    // ── Telnet server (start function, shared by both modes) ───────────────
+    let startTelnetServer (tnCfg: TelnetChannelConfig) =
+        let tnDeps = { deps with StreamHook = NoStreaming }
+        let tnCoordinator = AgentCoordinator(tnDeps)
+        let tnConfig : BotSharp.Infrastructure.Channels.TelnetChannel.TelnetConfig = {
+            Port = tnCfg.Port; AllowFrom = tnCfg.AllowFrom
+        }
+        let server = BotSharp.Infrastructure.Channels.TelnetChannel.TelnetServer(tnCoordinator, tnConfig)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── Inter-agent server (start function, shared by both modes) ──────────
     let startInterAgentServer (iaCfg: InterAgentChannelConfig) =
         let iaDeps = { deps with StreamHook = NoStreaming }
@@ -727,6 +739,12 @@ This file stores important information that persists across sessions.
             | Some emCfg -> Some (startEmailServer emCfg)
             | None -> None
 
+        // Telnet: start if configured
+        let tnServerOpt =
+            match config.Telnet with
+            | Some tnCfg -> Some (startTelnetServer tnCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -782,6 +800,7 @@ This file stores important information that persists across sessions.
         fsServerOpt |> Option.iter (fun s -> s.Stop())
         dtServerOpt |> Option.iter (fun s -> s.Stop())
         emServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        tnServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -852,6 +871,12 @@ This file stores important information that persists across sessions.
         let emServerOpt =
             match config.Email with
             | Some emCfg -> Some (startEmailServer emCfg)
+            | None -> None
+
+        // Telnet: start if configured
+        let tnServerOpt =
+            match config.Telnet with
+            | Some tnCfg -> Some (startTelnetServer tnCfg)
             | None -> None
 
         // Inter-agent: start if configured

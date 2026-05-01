@@ -795,6 +795,7 @@ type BotSharpConfig = {
     Feishu                 : FeishuChannelConfig option       // None = Feishu/Lark disabled
     DingTalk               : DingTalkChannelConfig option     // None = DingTalk disabled
     Email                  : EmailChannelConfig option        // None = Email disabled
+    Telnet                 : TelnetChannelConfig option       // None = Telnet disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -824,6 +825,11 @@ and DingTalkChannelConfig = {
     ClientSecret : string
     AllowFrom    : AllowList
     WebhookPort  : int
+}
+
+and TelnetChannelConfig = {
+    Port      : int
+    AllowFrom : AllowList
 }
 
 and EmailChannelConfig = {
@@ -918,6 +924,7 @@ module BotSharpConfig =
         Feishu             = None
         DingTalk           = None
         Email              = None
+        Telnet             = None
         InterAgent         = None
         FallbackModels     = []
     }

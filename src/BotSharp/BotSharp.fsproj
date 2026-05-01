@@ -97,6 +97,9 @@
     <!-- Email channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/EmailChannel.fs" />
 
+    <!-- Telnet channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/TelnetChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 
