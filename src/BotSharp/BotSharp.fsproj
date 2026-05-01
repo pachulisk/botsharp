@@ -103,6 +103,9 @@
     <!-- Matrix/Element channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/MatrixChannel.fs" />
 
+    <!-- QQ channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/QQChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 

@@ -615,6 +615,24 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 } : EmailChannelConfig option
             | _ -> None
 
+    // ── Parse optional [qq] section ──────────────────────────────────────────
+    let qqConfig =
+        match tryGetObject "qq" el with
+        | None -> None
+        | Some qq ->
+            match tryGetString "app_id" qq, tryGetString "secret" qq with
+            | Some appId, Some secret ->
+                let allowFrom =
+                    match tryGetArray "allow_from" qq with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                let sandbox = match tryGetBool "sandbox" qq with Some b -> b | None -> false
+                Some { AppId = appId; Secret = secret; AllowFrom = allowFrom; Sandbox = sandbox } : QQChannelConfig option
+            | _ -> None
+
     // ── Parse optional [matrix] section ──────────────────────────────────────
     let matrixConfig =
         match tryGetObject "matrix" el with
@@ -738,6 +756,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             Email                  = emailConfig
             Telnet                 = telnetConfig
             Matrix                 = matrixConfig
+            QQ                     = qqConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }

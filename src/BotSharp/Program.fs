@@ -574,6 +574,19 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(), cts.Token)
         (server, cts)
 
+    // ── QQ server (start function, shared by both modes) ───────────────────
+    let startQQServer (qqCfg: QQChannelConfig) =
+        let qqDeps = { deps with StreamHook = NoStreaming }
+        let qqCoordinator = AgentCoordinator(qqDeps)
+        let qqConf : BotSharp.Infrastructure.Channels.QQChannel.QQConfig = {
+            AppId = qqCfg.AppId; Secret = qqCfg.Secret
+            AllowFrom = qqCfg.AllowFrom; Sandbox = qqCfg.Sandbox
+        }
+        let server = BotSharp.Infrastructure.Channels.QQChannel.QQServer(qqCoordinator, qqConf, httpClient)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── Matrix server (start function, shared by both modes) ───────────────
     let startMatrixServer (mxCfg: MatrixChannelConfig) =
         let mxDeps = { deps with StreamHook = NoStreaming }
@@ -764,6 +777,12 @@ This file stores important information that persists across sessions.
             | Some mxCfg -> Some (startMatrixServer mxCfg)
             | None -> None
 
+        // QQ: start if configured
+        let qqServerOpt =
+            match config.QQ with
+            | Some qqCfg -> Some (startQQServer qqCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -821,6 +840,7 @@ This file stores important information that persists across sessions.
         emServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         tnServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         mxServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        qqServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -903,6 +923,12 @@ This file stores important information that persists across sessions.
         let mxServerOpt =
             match config.Matrix with
             | Some mxCfg -> Some (startMatrixServer mxCfg)
+            | None -> None
+
+        // QQ: start if configured
+        let qqServerOpt =
+            match config.QQ with
+            | Some qqCfg -> Some (startQQServer qqCfg)
             | None -> None
 
         // Inter-agent: start if configured
