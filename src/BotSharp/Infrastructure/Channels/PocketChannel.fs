@@ -226,77 +226,83 @@ let pocketAgentHook (rpc: PocketRpcClient) (sendToolHints: bool) : AgentHook =
 let private pocketChannel = ChannelId "pocket"
 let private pocketUser    = UserId    "user"
 
-let createPocketPort (rpc: PocketRpcClient) (config: PocketChannelConfig) (sessionKey: string option ref) : ChannelPort = {
+let private parseMessage (el: JsonElement) (sessionKey: string option ref) : InboundMessage =
+    let senderId =
+        match el.TryGetProperty("sender_id") with
+        | true, s -> s.GetString() |> Option.ofObj |> Option.defaultValue "user"
+        | _ -> "user"
+    let content =
+        match el.TryGetProperty("content") with
+        | true, c -> c.GetString() |> Option.ofObj |> Option.defaultValue ""
+        | _ -> ""
+    let media =
+        match el.TryGetProperty("media") with
+        | true, m when m.ValueKind = JsonValueKind.Array ->
+            m.EnumerateArray()
+            |> Seq.choose (fun v ->
+                if v.ValueKind = JsonValueKind.String then
+                    v.GetString() |> Option.ofObj
+                    |> Option.bind (fun path ->
+                        match LocalFilePath.create path with
+                        | Ok fp -> Some (ImageFile fp)
+                        | Error _ -> None)
+                else None)
+            |> Seq.toList
+        | _ -> []
+    let input =
+        match parseUserInput content with
+        | Result.Ok v  -> v
+        | Result.Error _ -> ChatMessage (content, media)
+    let sessionOverride = sessionKey.Value |> Option.map SessionId
+    {
+        Channel            = pocketChannel
+        Sender             = UserId senderId
+        Chat               = ChatId "pocket-session"
+        Input              = input
+        Metadata           = Map.empty
+        SessionKeyOverride = sessionOverride
+    }
+
+let createPocketPort (rpc: PocketRpcClient) (config: PocketChannelConfig) (sessionKey: string option ref) : ChannelPort =
+    // Buffer for messages when chat.poll returns multiple in one batch
+    let pendingMessages = System.Collections.Generic.Queue<InboundMessage>()
+    {
     Send = fun msg -> async {
         let sk = sessionKey.Value
         do! rpc.ChatSend(msg.Content, config.AgentId, ?sessionKey = sk, isProgress = false)
     }
 
     Receive = async {
-        try
-            let! result = rpc.ChatPoll(config.AgentId, config.PollTimeoutMs)
+        // Drain buffered messages first (from multi-message poll batches)
+        if pendingMessages.Count > 0 then
+            return Message (pendingMessages.Dequeue())
+        else
+            try
+                let! result = rpc.ChatPoll(config.AgentId, config.PollTimeoutMs)
 
-            // Extract session_key from response
-            match result.TryGetProperty("session_key") with
-            | true, sk when sk.ValueKind = JsonValueKind.String ->
-                sessionKey.Value <- sk.GetString() |> Option.ofObj
-            | _ -> ()
+                // Extract session_key from response
+                match result.TryGetProperty("session_key") with
+                | true, sk when sk.ValueKind = JsonValueKind.String ->
+                    sessionKey.Value <- sk.GetString() |> Option.ofObj
+                | _ -> ()
 
-            // Extract messages array
-            match result.TryGetProperty("messages") with
-            | true, msgs when msgs.ValueKind = JsonValueKind.Array ->
-                let arr = msgs.EnumerateArray() |> Seq.toArray
-                if arr.Length = 0 then
+                // Extract messages array
+                match result.TryGetProperty("messages") with
+                | true, msgs when msgs.ValueKind = JsonValueKind.Array ->
+                    let arr = msgs.EnumerateArray() |> Seq.toArray
+                    if arr.Length = 0 then
+                        return NoMessage
+                    else
+                        // Buffer all messages beyond the first
+                        for i in 1 .. arr.Length - 1 do
+                            pendingMessages.Enqueue(parseMessage arr.[i] sessionKey)
+                        return Message (parseMessage arr.[0] sessionKey)
+                | _ ->
                     return NoMessage
-                else
-                    let first = arr.[0]
-                    let senderId =
-                        match first.TryGetProperty("sender_id") with
-                        | true, s -> s.GetString() |> Option.ofObj |> Option.defaultValue "user"
-                        | _ -> "user"
-                    let content =
-                        match first.TryGetProperty("content") with
-                        | true, c -> c.GetString() |> Option.ofObj |> Option.defaultValue ""
-                        | _ -> ""
-                    // Parse media paths
-                    let media =
-                        match first.TryGetProperty("media") with
-                        | true, m when m.ValueKind = JsonValueKind.Array ->
-                            m.EnumerateArray()
-                            |> Seq.choose (fun v ->
-                                if v.ValueKind = JsonValueKind.String then
-                                    v.GetString() |> Option.ofObj
-                                    |> Option.bind (fun path ->
-                                        match LocalFilePath.create path with
-                                        | Ok fp -> Some (ImageFile fp)
-                                        | Error _ -> None)
-                                else None)
-                            |> Seq.toList
-                        | _ -> []
-
-                    let input =
-                        match parseUserInput content with
-                        | Result.Ok v  -> v
-                        | Result.Error _ -> ChatMessage (content, media)
-
-                    let sessionOverride =
-                        sessionKey.Value |> Option.map SessionId
-
-                    return Message {
-                        Channel            = pocketChannel
-                        Sender             = UserId senderId
-                        Chat               = ChatId "pocket-session"
-                        Input              = input
-                        Metadata           = Map.empty
-                        SessionKeyOverride = sessionOverride
-                    }
-            | _ ->
+            with ex ->
+                eprintfn "[pocket] poll error: %s" ex.Message
+                do! Async.Sleep 1000
                 return NoMessage
-        with ex ->
-            eprintfn "[pocket] poll error: %s" ex.Message
-            // Brief pause before retry to avoid tight error loop
-            do! Async.Sleep 1000
-            return NoMessage
     }
 }
 
