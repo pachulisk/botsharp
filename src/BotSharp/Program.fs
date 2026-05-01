@@ -574,6 +574,19 @@ This file stores important information that persists across sessions.
         Async.Start(server.Start(), cts.Token)
         (server, cts)
 
+    // ── Matrix server (start function, shared by both modes) ───────────────
+    let startMatrixServer (mxCfg: MatrixChannelConfig) =
+        let mxDeps = { deps with StreamHook = NoStreaming }
+        let mxCoordinator = AgentCoordinator(mxDeps)
+        let mxConfig : BotSharp.Infrastructure.Channels.MatrixChannel.MatrixConfig = {
+            Homeserver = mxCfg.Homeserver; UserId = mxCfg.UserId
+            AccessToken = mxCfg.AccessToken; AllowFrom = mxCfg.AllowFrom
+        }
+        let server = BotSharp.Infrastructure.Channels.MatrixChannel.MatrixServer(mxCoordinator, mxConfig, httpClient)
+        let cts = new System.Threading.CancellationTokenSource()
+        Async.Start(server.Start(), cts.Token)
+        (server, cts)
+
     // ── Telnet server (start function, shared by both modes) ───────────────
     let startTelnetServer (tnCfg: TelnetChannelConfig) =
         let tnDeps = { deps with StreamHook = NoStreaming }
@@ -745,6 +758,12 @@ This file stores important information that persists across sessions.
             | Some tnCfg -> Some (startTelnetServer tnCfg)
             | None -> None
 
+        // Matrix: start if configured
+        let mxServerOpt =
+            match config.Matrix with
+            | Some mxCfg -> Some (startMatrixServer mxCfg)
+            | None -> None
+
         // Inter-agent: start if configured
         let iaServerOpt =
             match config.InterAgent with
@@ -801,6 +820,7 @@ This file stores important information that persists across sessions.
         dtServerOpt |> Option.iter (fun s -> s.Stop())
         emServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         tnServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
+        mxServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
         autoCompactSvc.Stop()
         sessionCleanupSvc.Stop()
@@ -877,6 +897,12 @@ This file stores important information that persists across sessions.
         let tnServerOpt =
             match config.Telnet with
             | Some tnCfg -> Some (startTelnetServer tnCfg)
+            | None -> None
+
+        // Matrix: start if configured
+        let mxServerOpt =
+            match config.Matrix with
+            | Some mxCfg -> Some (startMatrixServer mxCfg)
             | None -> None
 
         // Inter-agent: start if configured

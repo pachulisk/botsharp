@@ -100,6 +100,9 @@
     <!-- Telnet channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/TelnetChannel.fs" />
 
+    <!-- Matrix/Element channel (after SessionActor — uses AgentCoordinator) -->
+    <Compile Include="Infrastructure/Channels/MatrixChannel.fs" />
+
     <!-- Inter-agent communication channel (after SessionActor — uses AgentCoordinator) -->
     <Compile Include="Infrastructure/Channels/InterAgentChannel.fs" />
 

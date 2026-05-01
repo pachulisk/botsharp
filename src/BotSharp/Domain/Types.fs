@@ -796,6 +796,7 @@ type BotSharpConfig = {
     DingTalk               : DingTalkChannelConfig option     // None = DingTalk disabled
     Email                  : EmailChannelConfig option        // None = Email disabled
     Telnet                 : TelnetChannelConfig option       // None = Telnet disabled
+    Matrix                 : MatrixChannelConfig option       // None = Matrix disabled
     InterAgent             : InterAgentChannelConfig option  // None = inter-agent channel disabled
     FallbackModels         : string list                   // ordered fallback model names when primary fails (e.g. ["deepseek-v4-pro"; "gpt-4o"])
 }
@@ -825,6 +826,13 @@ and DingTalkChannelConfig = {
     ClientSecret : string
     AllowFrom    : AllowList
     WebhookPort  : int
+}
+
+and MatrixChannelConfig = {
+    Homeserver  : string
+    UserId      : string
+    AccessToken : string
+    AllowFrom   : AllowList
 }
 
 and TelnetChannelConfig = {
@@ -925,6 +933,7 @@ module BotSharpConfig =
         DingTalk           = None
         Email              = None
         Telnet             = None
+        Matrix             = None
         InterAgent         = None
         FallbackModels     = []
     }

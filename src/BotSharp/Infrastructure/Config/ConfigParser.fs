@@ -615,6 +615,23 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
                 } : EmailChannelConfig option
             | _ -> None
 
+    // ── Parse optional [matrix] section ──────────────────────────────────────
+    let matrixConfig =
+        match tryGetObject "matrix" el with
+        | None -> None
+        | Some mx ->
+            match tryGetString "homeserver" mx, tryGetString "user_id" mx, tryGetString "access_token" mx with
+            | Some hs, Some uid, Some token ->
+                let allowFrom =
+                    match tryGetArray "allow_from" mx with
+                    | None -> AnyoneAllowed
+                    | Some elems ->
+                        let ids = elems |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
+                        if ids |> List.exists (fun s -> s = "*") then AnyoneAllowed
+                        else AllowedSet (Set.ofList ids)
+                Some { Homeserver = hs; UserId = uid; AccessToken = token; AllowFrom = allowFrom } : MatrixChannelConfig option
+            | _ -> None
+
     // ── Parse optional [telnet] section ──────────────────────────────────────
     let telnetConfig =
         match tryGetObject "telnet" el with
@@ -720,6 +737,7 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             DingTalk               = dingtalkConfig
             Email                  = emailConfig
             Telnet                 = telnetConfig
+            Matrix                 = matrixConfig
             InterAgent             = interAgentConfig
             FallbackModels         = tryGetArray "fallback_models" el |> Option.defaultValue [] |> List.choose (fun (e: JsonElement) -> if e.ValueKind = JsonValueKind.String then e.GetString() |> Option.ofObj else None)
         }
