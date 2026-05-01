@@ -20,6 +20,7 @@ open BotSharp.Application.HeartbeatService
 open BotSharp.Infrastructure.Skills.DefaultSkills
 open BotSharp.Infrastructure.Channels.CliChannel
 open BotSharp.Infrastructure.Channels.PocketChannel
+open BotSharp.Infrastructure.Tools.PocketToolBridge
 open BotSharp.Infrastructure.Channels.OnboardingWizard
 open BotSharp.Infrastructure.Channels.TelegramChannel
 open BotSharp.Infrastructure.Channels.ApiChannel
@@ -785,8 +786,18 @@ This file stores important information that persists across sessions.
             eprintfn "[pocket] Connecting to HostBridge socket: %s" pocketCfg.SocketName
             let rpc = new PocketRpcClient(pocketCfg.SocketName)
             let sessionKeyRef : string option ref = ref None
+
+            // Register pocket native tools (HostBridge JSON-RPC methods)
+            let pocketTools = createPocketTools rpc
+            let pocketToolMap =
+                pocketTools
+                |> List.fold (fun (m: Map<ToolName, ToolSpec * (Map<string, JsonElement> -> Async<ToolResult>)>) (spec, exec) ->
+                    Map.add spec.Name (spec, exec) m) deps.Tools
+            eprintfn "[pocket] Registered %s native device tools" (string pocketTools.Length)
+
             let pocketDeps = {
                 deps with
+                    Tools      = pocketToolMap
                     StreamHook = pocketStreamHook rpc pocketCfg.AgentId sessionKeyRef
                     Hook       = pocketAgentHook rpc config.SendToolHints
             }

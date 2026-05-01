@@ -78,8 +78,10 @@ type PocketRpcClient(socketName: string) =
             let endpoint = UnixDomainSocketEndPoint(effectivePath)
             s.Connect(endpoint)
             let stream = new NetworkStream(s, ownsSocket = false)
-            let r = new StreamReader(stream, Encoding.UTF8)
-            let w = new StreamWriter(stream, Encoding.UTF8, NewLine = "\n")
+            let utf8NoBom = new UTF8Encoding(false)  // no BOM — critical for JSON-RPC line protocol
+            let r = new StreamReader(stream, utf8NoBom)
+            let w = new StreamWriter(stream, utf8NoBom)
+            w.NewLine <- "\n"
             socket <- Some s
             reader <- Some r
             writer <- Some w
@@ -144,7 +146,7 @@ type PocketRpcClient(socketName: string) =
 
     member this.ChatPoll(agentId: string, timeoutMs: int) =
         async {
-            let paramsJson = sprintf """{"agent_id":"%s","timeout_ms":%d}""" agentId timeoutMs
+            let paramsJson = """{"agent_id":""" + "\"" + agentId + "\"" + ""","timeout_ms":""" + string timeoutMs + "}"
             return! this.Request("chat.poll", paramsJson)
         }
 
