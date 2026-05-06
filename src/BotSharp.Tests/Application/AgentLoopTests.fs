@@ -2762,3 +2762,97 @@ let ``runAgentLoop does not alter tool result when no secret pattern present`` (
         | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
         | Some content -> Assert.Equal(safeContent, content)
     | other -> Assert.Fail($"Expected Ok result, got {other}")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ToolFailure subtype rendering — WorkspaceViolation / ExecutionTimeout / ParameterInvalid
+//
+// Each case maps to a distinct "[…]" placeholder that is stored in the
+// ToolResultMessage and fed back to the LLM.  Tests check the snapshot content.
+// ═══════════════════════════════════════════════════════════════════════════
+
+[<Fact>]
+let ``runAgentLoop renders WorkspaceViolation as Access denied message`` () =
+    let toolCall = {
+        Id           = ToolCallId "call_ws"
+        Tool         = ToolName "fs_tool"
+        Arguments    = Map.empty
+        ProviderMeta = None
+    }
+    let responses = [ toolCallResponse [toolCall]; textResponse "ok" ]
+    let wsTools =
+        Map.ofList [
+            ToolName "fs_tool",
+            ( { Name = ToolName "fs_tool"; Description = "file tool"; Parameters = Map.empty; ConcurrencySafe = false },
+              fun _ -> async { return ToolFailure (WorkspaceViolation "../escape") })
+        ]
+    let deps = makeDepsWithTools (stubProviderSeq responses) wsTools
+    match runAgentLoop dummyInbound deps None |> Async.RunSynchronously with
+    | Result.Ok (_, snap) ->
+        let content =
+            SessionSnapshot.messages snap
+            |> List.choose (function ToolResultMessage (_, _, c) -> Some c | _ -> None)
+            |> List.tryHead
+        match content with
+        | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
+        | Some c ->
+            Assert.Contains("[Access denied:", c)
+            Assert.Contains("../escape", c)
+    | other -> Assert.Fail($"Expected Ok, got {other}")
+
+[<Fact>]
+let ``runAgentLoop renders ExecutionTimeout as timed out message`` () =
+    let toolCall = {
+        Id           = ToolCallId "call_timeout"
+        Tool         = ToolName "slow_tool"
+        Arguments    = Map.empty
+        ProviderMeta = None
+    }
+    let responses = [ toolCallResponse [toolCall]; textResponse "ok" ]
+    let slowTools =
+        Map.ofList [
+            ToolName "slow_tool",
+            ( { Name = ToolName "slow_tool"; Description = "slow tool"; Parameters = Map.empty; ConcurrencySafe = false },
+              fun _ -> async { return ToolFailure (ExecutionTimeout (TimeSpan.FromSeconds(30.0))) })
+        ]
+    let deps = makeDepsWithTools (stubProviderSeq responses) slowTools
+    match runAgentLoop dummyInbound deps None |> Async.RunSynchronously with
+    | Result.Ok (_, snap) ->
+        let content =
+            SessionSnapshot.messages snap
+            |> List.choose (function ToolResultMessage (_, _, c) -> Some c | _ -> None)
+            |> List.tryHead
+        match content with
+        | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
+        | Some c ->
+            Assert.Contains("[Tool timed out after", c)
+            Assert.Contains("30", c)
+    | other -> Assert.Fail($"Expected Ok, got {other}")
+
+[<Fact>]
+let ``runAgentLoop renders ParameterInvalid as invalid parameter message`` () =
+    let toolCall = {
+        Id           = ToolCallId "call_param"
+        Tool         = ToolName "strict_tool"
+        Arguments    = Map.empty
+        ProviderMeta = None
+    }
+    let responses = [ toolCallResponse [toolCall]; textResponse "ok" ]
+    let strictTools =
+        Map.ofList [
+            ToolName "strict_tool",
+            ( { Name = ToolName "strict_tool"; Description = "strict tool"; Parameters = Map.empty; ConcurrencySafe = false },
+              fun _ -> async { return ToolFailure (ParameterInvalid ("format", "must be json")) })
+        ]
+    let deps = makeDepsWithTools (stubProviderSeq responses) strictTools
+    match runAgentLoop dummyInbound deps None |> Async.RunSynchronously with
+    | Result.Ok (_, snap) ->
+        let content =
+            SessionSnapshot.messages snap
+            |> List.choose (function ToolResultMessage (_, _, c) -> Some c | _ -> None)
+            |> List.tryHead
+        match content with
+        | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
+        | Some c ->
+            Assert.Contains("[Invalid parameter format:", c)
+            Assert.Contains("must be json", c)
+    | other -> Assert.Fail($"Expected Ok, got {other}")
