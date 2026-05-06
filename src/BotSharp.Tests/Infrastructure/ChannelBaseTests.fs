@@ -3,6 +3,7 @@ module BotSharp.Tests.Infrastructure.ChannelBaseTests
 open Xunit
 open BotSharp.Domain.Types
 open BotSharp.Infrastructure.Channels.ChannelBase
+open BotSharp.Infrastructure.Input.InputParser
 
 // ── AnyoneAllowed ────────────────────────────────────────────────────────────
 
@@ -72,3 +73,41 @@ let ``isAllowed AllowedSet requires exact match — prefix bypass is denied`` ()
 let ``isAllowed AllowedSet requires exact match — suffix bypass is denied`` () =
     let allowList = AllowedSet (Set.ofList [ "alice" ])
     Assert.False(isAllowed (UserId "not-alice") allowList)
+
+// ── parseInput ────────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``parseInput "/new" returns Command NewSession`` () =
+    match parseInput "/new" with
+    | Command NewSession -> ()
+    | other -> Assert.Fail($"Expected Command NewSession, got {other}")
+
+[<Fact>]
+let ``parseInput "/help" returns Command ShowHelp`` () =
+    match parseInput "/help" with
+    | Command ShowHelp -> ()
+    | other -> Assert.Fail($"Expected Command ShowHelp, got {other}")
+
+[<Fact>]
+let ``parseInput "/dream" returns Command Dream`` () =
+    match parseInput "/dream" with
+    | Command Dream -> ()
+    | other -> Assert.Fail($"Expected Command Dream, got {other}")
+
+[<Fact>]
+let ``parseInput plain text returns ChatMessage with that text`` () =
+    match parseInput "hello world" with
+    | ChatMessage (text, _) -> Assert.Equal("hello world", text)
+    | other -> Assert.Fail($"Expected ChatMessage, got {other}")
+
+[<Fact>]
+let ``parseInput empty string returns empty ChatMessage`` () =
+    match parseInput "" with
+    | ChatMessage (text, _) -> Assert.Equal("", text)
+    | other -> Assert.Fail($"Expected ChatMessage, got {other}")
+
+[<Fact>]
+let ``parseInput non-slash command is not confused as a command`` () =
+    match parseInput "what /new means?" with
+    | ChatMessage _ -> ()
+    | other -> Assert.Fail($"Expected ChatMessage for non-leading slash, got {other}")

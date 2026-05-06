@@ -4,6 +4,7 @@ open System
 open Microsoft.Data.Sqlite
 open Xunit
 open BotSharp.Domain.Types
+open BotSharp.Infrastructure.Storage.StateDb
 open BotSharp.Infrastructure.Storage.JobQueue
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -474,3 +475,34 @@ let ``markFailedIfUnowned returns false when ownership token does not match`` ()
         let job = getJob (openDb()) "test" "sess-1" |> Async.RunSynchronously
         Assert.Equal(Some "running", job |> Option.map (fun j -> j.Status))
     | _ -> Assert.Fail("Expected Claimed outcome")
+
+// ── sessionWatermark ──────────────────────────────────────────────────────────
+
+let private mkEntry (updatedAt: DateTimeOffset) : SessionIndexEntry =
+    { Id               = SessionId "cli:test"
+      Channel          = "cli"
+      ChatId           = None
+      CreatedAt        = DateTimeOffset.UtcNow
+      UpdatedAt        = updatedAt
+      MessageCount     = 0
+      LastConsolidated = 0
+      FirstUserMessage = None
+      Title            = None
+      ArchivedAt       = None }
+
+[<Fact>]
+let ``sessionWatermark returns UpdatedAt as Unix milliseconds`` () =
+    let ts = DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero)
+    let entry = mkEntry ts
+    Assert.Equal(ts.ToUnixTimeMilliseconds(), sessionWatermark entry)
+
+[<Fact>]
+let ``sessionWatermark epoch returns 0`` () =
+    let entry = mkEntry (DateTimeOffset.FromUnixTimeMilliseconds(0L))
+    Assert.Equal(0L, sessionWatermark entry)
+
+[<Fact>]
+let ``sessionWatermark is consistent with DateTimeOffset.ToUnixTimeMilliseconds`` () =
+    let ts = DateTimeOffset.UtcNow
+    let entry = mkEntry ts
+    Assert.Equal(ts.ToUnixTimeMilliseconds(), sessionWatermark entry)
