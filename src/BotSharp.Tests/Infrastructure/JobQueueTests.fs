@@ -314,27 +314,84 @@ let ``heartbeat with wrong token returns false`` () =
 
 // ── formatJobSummary / makeWorkerId smoke tests ─────────────────────────
 
+let private baseJob status : JobSummary =
+    { Kind = "test"; JobKey = "mykey"; Status = status; WorkerId = None
+      OwnershipToken = None; StartedAt = None; FinishedAt = None
+      LeaseUntil = None; RetryAt = None; RetryRemaining = 3
+      LastError = None; InputWatermark = None; LastSuccessWatermark = None
+      CreatedAt = 0L; UpdatedAt = 0L }
+
 [<Fact>]
 let ``formatJobSummary returns a non-empty string`` () =
-    let job : JobSummary = {
-        Kind                 = "test"
-        JobKey               = "j"
-        Status               = "running"
-        WorkerId             = Some "1:1"
-        OwnershipToken       = None
-        StartedAt            = None
-        FinishedAt           = None
-        LeaseUntil           = None
-        RetryAt              = None
-        RetryRemaining       = 3
-        LastError            = None
-        InputWatermark       = Some 42L
-        LastSuccessWatermark = None
-        CreatedAt            = 0L
-        UpdatedAt            = 0L
-    }
+    let job = { baseJob "running" with WorkerId = Some "1:1"; InputWatermark = Some 42L }
     let s = formatJobSummary job
     Assert.True(s.Length > 0)
+
+[<Fact>]
+let ``formatJobSummary running status contains running text`` () =
+    let job = baseJob "running"
+    Assert.Contains("running", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary running with expired lease contains EXPIRED`` () =
+    let expiredLease = DateTimeOffset.UtcNow.AddMinutes(-5.0).ToUnixTimeMilliseconds()
+    let job = { baseJob "running" with LeaseUntil = Some expiredLease }
+    Assert.Contains("EXPIRED", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary running with future lease contains lease remaining`` () =
+    let futureLease = DateTimeOffset.UtcNow.AddMinutes(10.0).ToUnixTimeMilliseconds()
+    let job = { baseJob "running" with LeaseUntil = Some futureLease }
+    Assert.Contains("lease:", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary running with worker id contains worker text`` () =
+    let job = { baseJob "running" with WorkerId = Some "worker-abc" }
+    Assert.Contains("worker-abc", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary error status contains error text`` () =
+    Assert.Contains("error", formatJobSummary (baseJob "error"))
+
+[<Fact>]
+let ``formatJobSummary error with zero RetryRemaining contains retries exhausted`` () =
+    let job = { baseJob "error" with RetryRemaining = 0 }
+    Assert.Contains("retries exhausted", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary error with future RetryAt contains retry in text`` () =
+    let futureRetry = DateTimeOffset.UtcNow.AddMinutes(5.0).ToUnixTimeMilliseconds()
+    let job = { baseJob "error" with RetryAt = Some futureRetry; RetryRemaining = 2 }
+    Assert.Contains("retry in", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary error with LastError includes error message`` () =
+    let job = { baseJob "error" with LastError = Some "connection refused" }
+    Assert.Contains("connection refused", formatJobSummary job)
+
+[<Fact>]
+let ``formatJobSummary done status contains done text`` () =
+    Assert.Contains("done", formatJobSummary (baseJob "done"))
+
+[<Fact>]
+let ``formatJobSummary done with FinishedAt shows date`` () =
+    let finishedAt = DateTimeOffset.Parse("2026-01-15T10:30:00Z").ToUnixTimeMilliseconds()
+    let job = { baseJob "done" with FinishedAt = Some finishedAt }
+    let s = formatJobSummary job
+    Assert.Contains("2026-01-15", s)
+
+[<Fact>]
+let ``formatJobSummary pending status passes through unchanged`` () =
+    Assert.Contains("pending", formatJobSummary (baseJob "pending"))
+
+[<Fact>]
+let ``formatJobSummary includes job key in output`` () =
+    Assert.Contains("mykey", formatJobSummary (baseJob "done"))
+
+[<Fact>]
+let ``formatJobSummary running with InputWatermark includes watermark`` () =
+    let job = { baseJob "running" with InputWatermark = Some 9999L }
+    Assert.Contains("9999", formatJobSummary job)
 
 [<Fact>]
 let ``makeWorkerId returns a colon-separated string`` () =
