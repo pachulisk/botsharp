@@ -143,6 +143,37 @@ let ``syncPhase2Inputs handles empty output list`` () =
     finally
         try Directory.Delete(tmp, true) with _ -> ()
 
+[<Fact>]
+let ``syncPhase2Inputs sanitizes slug with special characters in filename`` () =
+    let tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+    Directory.CreateDirectory(tmp) |> ignore
+    try
+        // Slug with spaces and special chars that should be sanitized to underscores
+        let output = mkOutput "cli:spec-session" "raw" "summary" (Some "my task/with spaces") None
+        syncPhase2Inputs tmp [ output ] |> Async.RunSynchronously
+        let files = Directory.GetFiles(Path.Combine(tmp, "rollout_summaries"), "*.md")
+        Assert.Equal(1, files.Length)
+        // Filename should not contain '/' or spaces — those are replaced with '_'
+        let filename = Path.GetFileName(files.[0])
+        Assert.DoesNotContain("/", filename)
+        Assert.DoesNotContain(" ", filename)
+    finally
+        try Directory.Delete(tmp, true) with _ -> ()
+
+[<Fact>]
+let ``syncPhase2Inputs filename contains slug text`` () =
+    let tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+    Directory.CreateDirectory(tmp) |> ignore
+    try
+        let output = mkOutput "cli:slug-test" "raw" "summary" (Some "deploy_service") None
+        syncPhase2Inputs tmp [ output ] |> Async.RunSynchronously
+        let files = Directory.GetFiles(Path.Combine(tmp, "rollout_summaries"), "*.md")
+        Assert.Equal(1, files.Length)
+        let filename = Path.GetFileName(files.[0])
+        Assert.Contains("deploy_service", filename)
+    finally
+        try Directory.Delete(tmp, true) with _ -> ()
+
 // ── enqueuePhase2 ─────────────────────────────────────────────────────────
 
 [<Fact>]
