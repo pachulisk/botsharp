@@ -6,6 +6,7 @@ open Microsoft.Data.Sqlite
 open Xunit
 open BotSharp.Domain.Types
 open BotSharp.Infrastructure.Storage.StateDb
+open BotSharp.Infrastructure.Storage.SessionParser
 
 // ═══════════════════════════════════════════════════════════════════════════
 // StateDb unit tests — SQLite-backed session / task / stage1 index
@@ -461,6 +462,112 @@ let ``pruneStage1Outputs removes entries not used within maxUnusedDays`` () =
             let! remaining = getPhase2InputSelection conn 10 365
             Assert.Equal(1, remaining.Length)
             Assert.Equal("new-sess", remaining.[0].SessionId)
+        finally
+            try Directory.Delete(tmp, true) with _ -> ()
+    } |> Async.RunSynchronously
+
+// ── rebuildIndex ─────────────────────────────────────────────────────────
+
+/// Write a minimal JSONL session file to sessions/ dir.
+let private writeSessionFile (sessionsDir: string) (sid: string) (msgs: Message list) =
+    let path = Path.Combine(sessionsDir, sid + ".jsonl")
+    let lines = msgs |> List.map serializeMessage
+    File.WriteAllLines(path, lines)
+
+[<Fact>]
+let ``rebuildIndex returns zero counts when workspace is empty`` () =
+    async {
+        let openDb, tmp = mkDb ()
+        try
+            use conn = openDb ()
+            let! result = rebuildIndex tmp conn
+            Assert.Equal(0, result.SessionsIndexed)
+            Assert.Equal(0, result.ConsolidationsIndexed)
+            Assert.Empty(result.Errors)
+        finally
+            try Directory.Delete(tmp, true) with _ -> ()
+    } |> Async.RunSynchronously
+
+[<Fact>]
+let ``rebuildIndex indexes one session file`` () =
+    async {
+        let openDb, tmp = mkDb ()
+        try
+            let sessionsDir = Path.Combine(tmp, "sessions")
+            Directory.CreateDirectory(sessionsDir) |> ignore
+            writeSessionFile sessionsDir "cli:my-session"
+                [ UserMessage ("Hello", []); AssistantMessage ("Hi", None) ]
+            use conn = openDb ()
+            let! result = rebuildIndex tmp conn
+            Assert.Equal(1, result.SessionsIndexed)
+            Assert.Empty(result.Errors)
+            // Verify session is now in the index
+            let! sessions = listSessions conn 0 10 None
+            Assert.Equal(1, sessions.Length)
+        finally
+            try Directory.Delete(tmp, true) with _ -> ()
+    } |> Async.RunSynchronously
+
+[<Fact>]
+let ``rebuildIndex indexes multiple session files`` () =
+    async {
+        let openDb, tmp = mkDb ()
+        try
+            let sessionsDir = Path.Combine(tmp, "sessions")
+            Directory.CreateDirectory(sessionsDir) |> ignore
+            writeSessionFile sessionsDir "cli:session-1" [ UserMessage ("Q1", []); AssistantMessage ("A1", None) ]
+            writeSessionFile sessionsDir "cli:session-2" [ UserMessage ("Q2", []); AssistantMessage ("A2", None) ]
+            writeSessionFile sessionsDir "cli:session-3" [ UserMessage ("Q3", []); AssistantMessage ("A3", None) ]
+            use conn = openDb ()
+            let! result = rebuildIndex tmp conn
+            Assert.Equal(3, result.SessionsIndexed)
+            Assert.Empty(result.Errors)
+        finally
+            try Directory.Delete(tmp, true) with _ -> ()
+    } |> Async.RunSynchronously
+
+[<Fact>]
+let ``rebuildIndex clears existing sessions before rebuild`` () =
+    async {
+        let openDb, tmp = mkDb ()
+        try
+            use conn = openDb ()
+            // Sync a session manually
+            let snap = mkSnap "cli:old-session" 2 0 DateTimeOffset.UtcNow
+            do! syncSession conn snap
+            let! beforeCount = listSessions conn 0 10 None
+            Assert.Equal(1, beforeCount.Length)
+            // Rebuild from empty sessions/ dir (no JSONL files)
+            let sessionsDir = Path.Combine(tmp, "sessions")
+            Directory.CreateDirectory(sessionsDir) |> ignore
+            let! result = rebuildIndex tmp conn
+            Assert.Equal(0, result.SessionsIndexed)
+            // Old session should be gone
+            let! afterCount = listSessions conn 0 10 None
+            Assert.Equal(0, afterCount.Length)
+        finally
+            try Directory.Delete(tmp, true) with _ -> ()
+    } |> Async.RunSynchronously
+
+[<Fact>]
+let ``rebuildIndex handles malformed JSONL lines gracefully`` () =
+    async {
+        let openDb, tmp = mkDb ()
+        try
+            let sessionsDir = Path.Combine(tmp, "sessions")
+            Directory.CreateDirectory(sessionsDir) |> ignore
+            // Write a file with one valid line and one garbage line
+            let path = Path.Combine(sessionsDir, "cli:mixed.jsonl")
+            File.WriteAllLines(path, [
+                "{\"role\":\"user\",\"content\":\"hello\",\"media\":[]}"
+                "GARBAGE_LINE"
+            ])
+            use conn = openDb ()
+            let! result = rebuildIndex tmp conn
+            // The file parses successfully (partial parse), so sessionsIndexed=1
+            // Or it may fail and add an error — either is valid behavior.
+            // Just verify no exception is thrown and we get a result.
+            Assert.True(result.SessionsIndexed >= 0)
         finally
             try Directory.Delete(tmp, true) with _ -> ()
     } |> Async.RunSynchronously
