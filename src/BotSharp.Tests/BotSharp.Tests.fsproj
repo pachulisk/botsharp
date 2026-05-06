@@ -40,6 +40,7 @@
     <Compile Include="Infrastructure/JsonlStoreTests.fs" />
     <Compile Include="Infrastructure/DreamStoreTests.fs" />
     <Compile Include="Infrastructure/CronStoreTests.fs" />
+    <Compile Include="Infrastructure/JobQueueTests.fs" />
     <Compile Include="Infrastructure/CronServiceTests.fs" />
     <Compile Include="Infrastructure/CronToolTests.fs" />
     <Compile Include="Infrastructure/DefaultSkillsTests.fs" />

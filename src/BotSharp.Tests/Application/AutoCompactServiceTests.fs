@@ -15,20 +15,25 @@ open BotSharp.Application.AutoCompactService
 // Now uses SQLite job queue for candidate discovery and lifecycle tracking.
 // Each test creates an in-memory SQLite DB, syncs sessions into it, and
 // verifies compaction behavior through the job queue.
+//
+// Tests that need to verify actual compaction results call compactPass
+// directly (synchronously) to avoid thread-pool contention flakiness.
+// Tests that verify lifecycle (Start/Stop, TTL=0 disabling) still use
+// the full service.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Create an in-memory SQLite connection factory for tests.
-/// All connections share the same DB via Data Source name.
-let private mkTestDb (name: string) : (unit -> SqliteConnection) =
+/// Returns (factory, root). Caller MUST hold root alive with `use _root = root`;
+/// SQLite destroys the in-memory DB when the last connection closes.
+let private mkTestDb () : (unit -> SqliteConnection) * SqliteConnection =
+    let name    = Guid.NewGuid().ToString("N")
     let connStr = sprintf "Data Source=%s;Mode=Memory;Cache=Shared" name
-    // Keep one connection alive to hold the in-memory DB
-    let keepAlive = new SqliteConnection(connStr)
-    keepAlive.Open()
-    // Run migration
-    use cmd = keepAlive.CreateCommand()
+    let root = new SqliteConnection(connStr)
+    root.Open()
+    use cmd = root.CreateCommand()
     cmd.CommandText <- "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;"
     cmd.ExecuteNonQuery() |> ignore
-    use migCmd = keepAlive.CreateCommand()
+    use migCmd = root.CreateCommand()
     migCmd.CommandText <-
         "CREATE TABLE IF NOT EXISTS sessions (" +
         "id TEXT PRIMARY KEY, channel TEXT NOT NULL, chat_id TEXT, " +
@@ -45,10 +50,11 @@ let private mkTestDb (name: string) : (unit -> SqliteConnection) =
         "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, " +
         "PRIMARY KEY (kind, job_key));"
     migCmd.ExecuteNonQuery() |> ignore
-    fun () ->
+    let factory () =
         let c = new SqliteConnection(connStr)
         c.Open()
         c
+    (factory, root)
 
 /// Insert a session into the test SQLite index.
 let private insertTestSession
@@ -96,9 +102,12 @@ let private mkDeps
       TokenTracker      = ref None
       EventBus          = None }
 
+// ── Lifecycle tests (use Start/Stop directly) ────────────────────────────
+
 [<Fact>]
 let ``AutoCompactService Start/Stop with ttl=0 does not crash`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let deps = mkDeps (System.Collections.Generic.Dictionary())
     let svc  = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 0)
     svc.Start()
@@ -106,7 +115,8 @@ let ``AutoCompactService Start/Stop with ttl=0 does not crash`` () =
 
 [<Fact>]
 let ``AutoCompactService Start/Stop with positive ttl does not crash`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let deps = mkDeps (System.Collections.Generic.Dictionary())
     let svc  = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 60)
     svc.Start()
@@ -114,8 +124,39 @@ let ``AutoCompactService Start/Stop with positive ttl does not crash`` () =
     svc.Stop()
 
 [<Fact>]
+let ``sessionTtlMinutes=0 disables the service so no session is compacted`` () =
+    let openDb, root = mkTestDb ()
+    use _root = root
+    let sid = SessionId "disabled-compact"
+    insertTestSession openDb "disabled-compact" "cli" 10 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
+
+    let now  = DateTimeOffset.UtcNow
+    let msgs = [ 1..10 ] |> List.map (fun i -> UserMessage ($"msg {i}", []))
+    let snap =
+        match SessionSnapshot.create sid msgs 0 now now with
+        | Result.Ok s    -> s
+        | Result.Error e -> failwith e
+
+    let sessions = System.Collections.Generic.Dictionary<SessionId, SessionSnapshot>()
+    sessions[sid] <- snap
+
+    let cfg  = { BotSharpConfig.defaults with MemoryWindowSize = 3 }
+    let deps = { mkDeps sessions with Config = cfg }
+
+    // TTL=0 disables Start() — background loop never runs
+    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 0)
+    svc.Start()
+    System.Threading.Thread.Sleep(100)
+    svc.Stop()
+
+    Assert.Equal(0, SessionSnapshot.lastConsolidated sessions[sid])
+
+// ── Compaction logic tests (call compactPass directly — deterministic) ───
+
+[<Fact>]
 let ``active session is skipped by SQLite query filter`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let sid = SessionId "test-session"
     // Insert session into index: idle (2h ago), enough messages
     insertTestSession openDb "test-session" "cli" 10 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
@@ -125,16 +166,14 @@ let ``active session is skipped by SQLite query filter`` () =
     let deps = { mkDeps persisted with Config = cfg }
 
     // Active session IDs includes our test session — filtered by listIdleSessionsForCompaction
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.singleton sid), sessionTtlMinutes = 60)
-    svc.Start()
-    System.Threading.Thread.Sleep(100)
-    svc.Stop()
+    let _ = compactPass deps openDb 60 (fun () -> Set.singleton sid) |> Async.RunSynchronously
 
     Assert.False(persisted.ContainsKey(sid), "Expected active session to be skipped")
 
 [<Fact>]
 let ``recent session is skipped because updated_at is within TTL`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let sid = SessionId "recent-session"
     // Insert session with updated_at = 1 minute ago (within 60-min TTL)
     insertTestSession openDb "recent-session" "cli" 10 0 (DateTimeOffset.UtcNow.AddMinutes(-1.0))
@@ -143,10 +182,7 @@ let ``recent session is skipped because updated_at is within TTL`` () =
     let cfg = { BotSharpConfig.defaults with MemoryWindowSize = 3 }
     let deps = { mkDeps persisted with Config = cfg }
 
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 60)
-    svc.Start()
-    System.Threading.Thread.Sleep(100)
-    svc.Stop()
+    let _ = compactPass deps openDb 60 (fun () -> Set.empty) |> Async.RunSynchronously
 
     Assert.False(persisted.ContainsKey(sid), "Expected recently-modified session to be skipped")
 
@@ -155,7 +191,8 @@ let ``idle session with enough unconsolidated messages gets compacted and persis
     let tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory(Path.Combine(tmp, "memory")) |> ignore
 
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let sid = SessionId "idle-session"
     // Insert into index: idle 2h, 5 messages, 0 consolidated
     insertTestSession openDb "idle-session" "cli" 5 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
@@ -199,13 +236,7 @@ let ``idle session with enough unconsolidated messages gets compacted and persis
     let cfg  = { BotSharpConfig.defaults with WorkspacePath = tmp; MemoryWindowSize = 3 }
     let deps = { mkDeps sessions with Config = cfg; Provider = saveMemProvider }
 
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 60)
-    svc.Start()
-    let deadline = DateTime.UtcNow.AddSeconds(3.0)
-    while (not (sessions.ContainsKey(sid) && SessionSnapshot.lastConsolidated sessions[sid] > 0))
-          && DateTime.UtcNow < deadline do
-        System.Threading.Thread.Sleep(50)
-    svc.Stop()
+    let _ = compactPass deps openDb 60 (fun () -> Set.empty) |> Async.RunSynchronously
 
     Assert.True(sessions.ContainsKey(sid), "Expected idle session to be compacted and persisted")
     let compacted = sessions[sid]
@@ -216,13 +247,14 @@ let ``idle session with enough unconsolidated messages gets compacted and persis
     let job = BotSharp.Infrastructure.Storage.JobQueue.getJob conn JobKind.Consolidation "idle-session" |> Async.RunSynchronously
     match job with
     | Some j -> Assert.Equal("done", j.Status)
-    | None -> ()  // job may not exist if openDb returned different DB — acceptable
+    | None -> ()
 
     try Directory.Delete(tmp, true) with _ -> ()
 
 [<Fact>]
 let ``idle session with too few unconsolidated messages is not compacted`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let sid = SessionId "sparse-session"
     // 2 messages, window=5 → unconsolidated (2) < 5 → not returned by listIdleSessionsForCompaction
     insertTestSession openDb "sparse-session" "cli" 2 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
@@ -240,17 +272,15 @@ let ``idle session with too few unconsolidated messages is not compacted`` () =
     let cfg  = { BotSharpConfig.defaults with MemoryWindowSize = 5 }
     let deps = { mkDeps sessions with Config = cfg }
 
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 60)
-    svc.Start()
-    System.Threading.Thread.Sleep(200)
-    svc.Stop()
+    let _ = compactPass deps openDb 60 (fun () -> Set.empty) |> Async.RunSynchronously
 
     let snap' = sessions[sid]
     Assert.Equal(0, SessionSnapshot.lastConsolidated snap')
 
 [<Fact>]
 let ``LoadSession error is recorded in job queue as failed`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let sid = SessionId "error-session"
     insertTestSession openDb "error-session" "cli" 10 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
 
@@ -261,10 +291,7 @@ let ``LoadSession error is recorded in job queue as failed`` () =
             Config      = cfg
             LoadSession = fun _ -> async { return Result.Error (WriteFailure "simulated load failure") } }
 
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 60)
-    svc.Start()
-    System.Threading.Thread.Sleep(300)
-    svc.Stop()
+    let _ = compactPass deps openDb 60 (fun () -> Set.empty) |> Async.RunSynchronously
 
     Assert.False(persisted.ContainsKey(sid), "Nothing should be persisted on load error")
 
@@ -273,7 +300,8 @@ let ``consolidation error is recorded in job queue`` () =
     let tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory(Path.Combine(tmp, "memory")) |> ignore
 
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
+    let openDb, root = mkTestDb ()
+    use _root = root
     let sid = SessionId "error-compact"
     insertTestSession openDb "error-compact" "cli" 5 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
 
@@ -300,37 +328,8 @@ let ``consolidation error is recorded in job queue`` () =
     let cfg  = { BotSharpConfig.defaults with WorkspacePath = tmp; MemoryWindowSize = 3 }
     let deps = { mkDeps sessions with Config = cfg; Provider = errorProvider }
 
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 60)
-    svc.Start()
-    System.Threading.Thread.Sleep(300)
-    svc.Stop()
+    let _ = compactPass deps openDb 60 (fun () -> Set.empty) |> Async.RunSynchronously
 
     Assert.Equal(0, SessionSnapshot.lastConsolidated sessions[sid])
 
     try Directory.Delete(tmp, true) with _ -> ()
-
-[<Fact>]
-let ``sessionTtlMinutes=0 disables the service so no session is compacted`` () =
-    let openDb = mkTestDb (Guid.NewGuid().ToString("N"))
-    let sid = SessionId "disabled-compact"
-    insertTestSession openDb "disabled-compact" "cli" 10 0 (DateTimeOffset.UtcNow.AddHours(-2.0))
-
-    let now  = DateTimeOffset.UtcNow
-    let msgs = [ 1..10 ] |> List.map (fun i -> UserMessage ($"msg {i}", []))
-    let snap =
-        match SessionSnapshot.create sid msgs 0 now now with
-        | Result.Ok s    -> s
-        | Result.Error e -> failwith e
-
-    let sessions = System.Collections.Generic.Dictionary<SessionId, SessionSnapshot>()
-    sessions[sid] <- snap
-
-    let cfg  = { BotSharpConfig.defaults with MemoryWindowSize = 3 }
-    let deps = { mkDeps sessions with Config = cfg }
-
-    let svc = AutoCompactService(deps, openDb, (fun () -> Set.empty), sessionTtlMinutes = 0)
-    svc.Start()
-    System.Threading.Thread.Sleep(100)
-    svc.Stop()
-
-    Assert.Equal(0, SessionSnapshot.lastConsolidated sessions[sid])
