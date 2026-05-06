@@ -13,11 +13,104 @@ open BotSharp.Infrastructure.Skills.SkillsLoader
 // Builds the LLMRequest from a session snapshot + inbound message.
 // Pure where possible; file I/O is limited to loading the system prompt.
 //
-// System prompt priority:
-//   1. {workspacePath}/IDENTITY.md — agent persona / identity
-//   2. {workspacePath}/AGENTS.md   — capability/tool documentation (optional)
-//   3. Fallback: a hardcoded minimal prompt
+// Memory injection modes:
+//   - Progressive disclosure: when memory_summary.md exists or MEMORY.md
+//     exceeds MemoryDirectInjectLimit, inject a summary + retrieval instructions.
+//     Agent uses existing tools (read_file, grep) to retrieve details on demand.
+//     Mirrors Codex's read_path.md prompt engineering pattern.
+//   - Full injection: when MEMORY.md is small, inject the entire content
+//     (backward compatible, optimal for short memory files).
 // ═══════════════════════════════════════════════════════════════════════════
+
+// ── Progressive memory disclosure template ──────────────────────────────
+// Mirrors Codex memories/read/templates/memories/read_path.md.
+// Agent is taught to search memory on-demand using existing file tools.
+
+let private memoryReadPathTemplate (memoryBasePath: string) (sessionsPath: string) (memorySummary: string) : string =
+    $"""# Memory System
+
+You have access to a persistent memory system at `{memoryBasePath}`.
+
+## When to Use Memory
+
+Skip memory lookup ONLY when the task is completely self-contained (current time, trivial formatting, simple math).
+
+Use memory by default when:
+- Query mentions a workspace, project, repo, module, or path referenced in MEMORY_SUMMARY below
+- User asks for prior context, consistency with previous decisions, or "what did we do last time"
+- Task is ambiguous and could depend on earlier choices or user preferences
+- Non-trivial work on topics covered in MEMORY_SUMMARY
+
+## Memory Layout
+
+```
+{memoryBasePath}/
+├── MEMORY.md            ← Searchable registry; PRIMARY FILE TO QUERY
+├── HISTORY.md           ← Chronological session log
+└── .dream_cursor        ← Internal (ignore)
+```
+
+## Retrieval Protocol (4-6 steps max)
+
+1. **Skim MEMORY_SUMMARY** below — extract task-relevant keywords
+2. **Search `MEMORY.md`** — `grep "keyword" {memoryBasePath}/MEMORY.md`
+3. **If MEMORY.md points to files** — open 1-2 most relevant with read_file
+4. **If unclear** — search session history for exact commands/errors:
+   - `grep "error message" {sessionsPath}/<session>.jsonl`
+5. **If no relevant hits** — STOP and continue normally
+
+**Budget: ≤ 4-6 search steps before main work. Do NOT broadly scan all files.**
+
+During execution: if repeated errors occur, redo a quick memory pass for similar past failures.
+
+## Verification Strategy
+
+When using facts from memory:
+- **Easy to verify + might be stale** → verify before answering (e.g., file paths, versions)
+- **Expensive to verify + might be stale** → answer from memory, note it may be outdated
+- **Unlikely to change** → answer from memory directly (e.g., user preferences, decisions)
+
+## Citation Format
+
+When you use memory in your response, append one citation block at the END:
+
+```
+<mem-citation>
+MEMORY.md:12-15|note=[user prefers dark theme]
+</mem-citation>
+```
+
+Rules:
+- One entry per line: `<file>:<line_start>-<line_end>|note=[brief usage description]`
+- File paths relative to `{memoryBasePath}/`
+- Order by importance (most important first)
+- If no memory was used, omit the citation block entirely
+
+---
+
+## MEMORY_SUMMARY
+
+{memorySummary}"""
+
+// ── Token budget truncation ─────────────────────────────────────────────
+
+/// Truncate text to a token budget (1 token ≈ 4 UTF-8 bytes).
+/// Mirrors Codex read/src/prompts.rs TruncationPolicy::Tokens.
+let private truncateToTokenBudget (maxTokens: int) (text: string) : string =
+    let maxBytes = maxTokens * 4
+    let textBytes = Text.Encoding.UTF8.GetByteCount(text)
+    if textBytes <= maxBytes then text
+    else
+        // Truncate at UTF-8 character boundary
+        let mutable byteCount = 0
+        let mutable charCount = 0
+        for c in text do
+            let cb = Text.Encoding.UTF8.GetByteCount(string c)
+            if byteCount + cb <= maxBytes then
+                byteCount <- byteCount + cb
+                charCount <- charCount + 1
+        if charCount >= text.Length then text
+        else text.[..charCount - 1] + "\n\n...(truncated)..."
 
 let private readOptional (path: string) : Async<string option> =
     async {
@@ -84,12 +177,14 @@ let private channelFormatHint (channelOpt: string option) : string option =
 ///   2. [Format Hint] — channel-specific formatting guidance (optional)
 ///   3. Bootstrap files each formatted as "## {filename}\n\n{content}":
 ///      AGENTS.md, SOUL.md, USER.md, TOOLS.md (any combination, all optional)
-///   4. memory/MEMORY.md — long-term memory (persisted by MemoryConsolidator)
+///   4. memory — progressive disclosure (summary + retrieval instructions)
+///      or full injection (when MEMORY.md is small enough)
 ///   5. Available Skills summary (filtered by disabledSkills)
 ///   6. memory/HISTORY.md tail — recent session history (last ~32 KB)
 ///      Mirrors Python's "# Recent History" injection so the agent can see
 ///      what happened in past sessions without full retrieval.
-let buildSystemPrompt (disabledSkills: string list) (systemPromptAppend: string option) (channel: string option) (workspacePath: string) : Async<string> =
+/// Full version with config for memory disclosure thresholds.
+let buildSystemPromptWithConfig (disabledSkills: string list) (systemPromptAppend: string option) (channel: string option) (workspacePath: string) (config: BotSharpConfig) : Async<string> =
     async {
         let join p f = Path.Combine(workspacePath, p, f)
         let at f     = Path.Combine(workspacePath, f)
@@ -103,8 +198,9 @@ let buildSystemPrompt (disabledSkills: string list) (systemPromptAppend: string 
         let! userMd  = readOptional (at "USER.md")
         let! tools   = readOptional (at "TOOLS.md")
 
-        // Long-term memory persisted by MemoryConsolidator
-        let! memory  = readOptional (join "memory" "MEMORY.md")
+        // Long-term memory: try memory_summary.md first, then fall back to MEMORY.md
+        let! memorySummary = readOptional (join "memory" "memory_summary.md")
+        let! memory        = readOptional (join "memory" "MEMORY.md")
 
         let! allSkills = listSkills workspacePath
         // Apply disabled_skills filter. Matches by skill Name (from frontmatter or dir name).
@@ -165,10 +261,27 @@ let buildSystemPrompt (disabledSkills: string list) (systemPromptAppend: string 
               if not bootstrapParts.IsEmpty then
                   yield String.concat "\n\n" bootstrapParts
 
-              // 3. Long-term memory
-              match memory with
-              | Some txt -> yield $"# Memory\n\n{txt}"
-              | None     -> ()
+              // 3. Long-term memory (progressive disclosure or full injection)
+              //    Priority: memory_summary.md → MEMORY.md (large → progressive) → MEMORY.md (small → full)
+              let memoryBasePath = Path.Combine(workspacePath, "memory")
+              let sessionsPath = Path.Combine(workspacePath, "sessions")
+              match memorySummary with
+              | Some summary ->
+                  // Phase 2 mode: memory_summary.md exists → progressive disclosure
+                  let truncated = truncateToTokenBudget config.MemorySummaryTokenLimit summary
+                  yield memoryReadPathTemplate memoryBasePath sessionsPath truncated
+              | None ->
+                  match memory with
+                  | Some txt ->
+                      let estimatedTokens = Text.Encoding.UTF8.GetByteCount(txt) / 4
+                      if estimatedTokens > config.MemoryDirectInjectLimit then
+                          // MEMORY.md too large → switch to progressive mode
+                          let truncated = truncateToTokenBudget config.MemorySummaryTokenLimit txt
+                          yield memoryReadPathTemplate memoryBasePath sessionsPath truncated
+                      else
+                          // MEMORY.md small enough → full injection (backward compatible)
+                          yield $"# Memory\n\n{txt}"
+                  | None -> ()
 
               // 4a. Always-active skills — full content injected inline as markdown.
               //     Mirrors Python's "# Active Skills" section (load_skills_for_context).
@@ -191,6 +304,10 @@ let buildSystemPrompt (disabledSkills: string list) (systemPromptAppend: string 
 
         return String.concat "\n\n---\n\n" sections
     }
+
+/// Backward-compatible wrapper — uses default config thresholds.
+let buildSystemPrompt (disabledSkills: string list) (systemPromptAppend: string option) (channel: string option) (workspacePath: string) : Async<string> =
+    buildSystemPromptWithConfig disabledSkills systemPromptAppend channel workspacePath BotSharpConfig.defaults
 
 /// Build a complete LLMRequest from current session state + inbound message.
 /// The system prompt is prepended as SystemMessage (role:system) — not stored in history.

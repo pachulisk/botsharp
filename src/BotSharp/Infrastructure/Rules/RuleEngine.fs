@@ -25,6 +25,8 @@ type RuleAction =
     | AllowFallback of reason: string
     | BlockFallback of reason: string
     | ConsolidateNow of reason: string
+    | InjectToolArg of tool: string * param: string * value: string
+    | AbortStream of reason: string
 
 type RuleEngine = {
     Env : ClipsEnv
@@ -144,6 +146,86 @@ let private builtinRules = """
 (deftemplate subagent-budget-exhausted
   (slot task-id (type STRING))
   (slot max-iterations (type INTEGER)))
+
+;; Stream health monitoring (asserted periodically during SSE streaming).
+;; CLIPS evaluates whether to abort the stream based on idle time,
+;; total elapsed time, and chunks received. Timeout is just one rule —
+;; users can add custom rules for model-specific or provider-specific behavior.
+(deftemplate stream-state
+  (slot idle-seconds (type INTEGER))
+  (slot total-seconds (type INTEGER))
+  (slot chunks-received (type INTEGER))
+  (slot model (type STRING)))
+
+;; Stream connected but no data received for 30s — provider may be stuck
+;; on initial response (e.g., thinking/reasoning phase stall).
+(defrule stream-no-initial-data
+  (declare (salience 30))
+  (stream-state (idle-seconds ?s&:(>= ?s 30)) (chunks-received 0))
+  (not (action (type "abort-stream")))
+  =>
+  (assert (action (type "abort-stream")
+                  (reason (str-cat "Stream connected but no data received for " ?s "s"))
+                  (tool ""))))
+
+;; Stream idle timeout: receiving data then went silent for 60s.
+(defrule stream-idle-timeout
+  (declare (salience 20))
+  (stream-state (idle-seconds ?s&:(>= ?s 60)) (chunks-received ?c&:(> ?c 0)))
+  (not (action (type "abort-stream")))
+  =>
+  (assert (action (type "abort-stream")
+                  (reason (str-cat "Stream idle for " ?s "s after " ?c " chunks"))
+                  (tool ""))))
+
+;; Overall stream wall-clock timeout: 300s regardless of activity.
+(defrule stream-total-timeout
+  (declare (salience 10))
+  (stream-state (total-seconds ?s&:(>= ?s 300)))
+  (not (action (type "abort-stream")))
+  =>
+  (assert (action (type "abort-stream")
+                  (reason (str-cat "Stream total time " ?s "s exceeded 300s limit"))
+                  (tool ""))))
+
+;; Pending ask_user interaction (tracks ask_user calls within a turn).
+(deftemplate ask-user-pending
+  (slot iteration (type INTEGER)))
+
+;; Agent called ask_user 3 times in one turn — stuck in question loop.
+(defrule excessive-ask-user
+  (ask-user-pending (iteration ?i1))
+  (ask-user-pending (iteration ?i2&:(> ?i2 ?i1)))
+  (ask-user-pending (iteration ?i3&:(> ?i3 ?i2)))
+  (not (action (type "stop-loop")))
+  =>
+  (assert (action (type "stop-loop")
+                  (reason "ask_user called 3 times in one turn - agent may be stuck in question loop")
+                  (tool "ask_user"))))
+
+;; Pre-execution tool call (asserted BEFORE a tool runs).
+;; Used to inspect and patch LLM-generated tool arguments.
+(deftemplate tool-call-pre
+  (slot tool (type STRING))
+  (slot has-action (type INTEGER))
+  (slot model (type STRING)))
+
+;; ═══════════════════════════════════════════════════════════════
+;; Pre-execution tool call rules
+;; ═══════════════════════════════════════════════════════════════
+
+;; When 'my' tool is called without the required 'action' parameter,
+;; inject a default value of "check" (safe read-only overview).
+;; This prevents repeated-tool-failure from firing when the LLM
+;; (especially MiMo, some Qwen variants) omits the enum argument.
+(defrule my-tool-default-action
+  (declare (salience 50))
+  (tool-call-pre (tool "my") (has-action 0))
+  (not (action (type "inject-tool-arg")))
+  =>
+  (assert (action (type "inject-tool-arg")
+                  (reason "action=check")
+                  (tool "my"))))
 
 ;; ═══════════════════════════════════════════════════════════════
 ;; Tool failure rules
@@ -674,6 +756,11 @@ let evaluate (engine: RuleEngine) : RuleAction list =
         | "allow-fallback"   -> Some (AllowFallback reason)
         | "block-fallback"   -> Some (BlockFallback reason)
         | "consolidate-now"  -> Some (ConsolidateNow reason)
+        | "inject-tool-arg" ->
+            match reason.IndexOf('=') with
+            | -1 -> None
+            | i  -> Some (InjectToolArg (tool, reason.[..i-1], reason.[i+1..]))
+        | "abort-stream"   -> Some (AbortStream reason)
         | _                -> None)
 
 /// Assert a session-truncated fact when max_messages cuts history.
@@ -766,6 +853,62 @@ let shouldFallback (engine: RuleEngine) : bool =
         let reason = actions |> List.tryPick (function BlockFallback r -> Some r | _ -> None) |> Option.defaultValue ""
         eprintfn "[RuleEngine] Fallback blocked: %s" reason
     not blocked
+
+// ── Stream health monitoring ─────────────────────────────────────────────
+
+/// Assert stream-state facts for CLIPS to evaluate stream health.
+/// Called periodically during SSE streaming (every check interval).
+let assertStreamState
+    (engine         : RuleEngine)
+    (idleSeconds    : int)
+    (totalSeconds   : int)
+    (chunksReceived : int)
+    (model          : string)
+    : unit =
+    let factStr =
+        sprintf "(stream-state (idle-seconds %d) (total-seconds %d) (chunks-received %d) (model \"%s\"))"
+            idleSeconds totalSeconds chunksReceived (escapeClips model)
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert stream-state failed: %s" msg
+
+/// Evaluate CLIPS rules and check if stream should be aborted.
+/// Returns Some reason if abort, None if stream should continue.
+let shouldAbortStream (engine: RuleEngine) : string option =
+    let actions = evaluate engine
+    actions |> List.tryPick (function AbortStream reason -> Some reason | _ -> None)
+
+// ── ask_user tracking ────────────────────────────────────────────────────
+
+/// Assert an ask-user-pending fact (tracks ask_user calls within a turn).
+let assertAskUserPending (engine: RuleEngine) (iteration: int) : unit =
+    let factStr = sprintf "(ask-user-pending (iteration %d))" iteration
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert ask-user-pending failed: %s" msg
+
+// ── Pre-execution tool call inspection ───────────────────────────────────
+
+/// Assert a tool-call-pre fact before executing a tool.
+/// hasAction: 1 if the "action" parameter is present, 0 if missing.
+let assertToolCallPre
+    (engine    : RuleEngine)
+    (tool      : string)
+    (hasAction : bool)
+    (model     : string)
+    : unit =
+    let factStr =
+        sprintf "(tool-call-pre (tool \"%s\") (has-action %d) (model \"%s\"))"
+            (escapeClips tool) (if hasAction then 1 else 0) (escapeClips model)
+    match assertFact engine.Env factStr with
+    | Ok ()     -> ()
+    | Error msg -> eprintfn "[RuleEngine] Assert tool-call-pre failed: %s" msg
+
+/// Evaluate pre-execution rules and return any argument injections.
+/// Returns a list of (toolName, paramName, paramValue) tuples.
+let getToolArgInjections (engine: RuleEngine) : (string * string * string) list =
+    let actions = evaluate engine
+    actions |> List.choose (function InjectToolArg (t, p, v) -> Some (t, p, v) | _ -> None)
 
 // ── Turn management ──────────────────────────────────────────────────────
 

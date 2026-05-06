@@ -37,6 +37,7 @@
     <Compile Include="Infrastructure/Storage/JsonlStore.fs" />
     <Compile Include="Infrastructure/Storage/DreamStore.fs" />
     <Compile Include="Infrastructure/Storage/StateDb.fs" />
+    <Compile Include="Infrastructure/Storage/JobQueue.fs" />
     <Compile Include="Infrastructure/Storage/CronStore.fs" />
     <Compile Include="Infrastructure/Cron/CronService.fs" />
     <Compile Include="Infrastructure/Skills/DefaultSkills.fs" />
@@ -50,12 +51,24 @@
     <Compile Include="Infrastructure/Tools/NotebookTool.fs" />
     <Compile Include="Infrastructure/Tools/MyTool.fs" />
     <Compile Include="Infrastructure/Tools/McpTool.fs" />
+    <Compile Include="Infrastructure/Tools/TaskTool.fs" />
+    <Compile Include="Infrastructure/Tools/AskUserTool.fs" />
     <Compile Include="Infrastructure/Tools/ToolHints.fs" />
+
+    <!-- Memory subsystem (citation parsing, progressive disclosure, model recommendation) -->
+    <Compile Include="Infrastructure/Memory/CitationParser.fs" />
+    <Compile Include="Infrastructure/Memory/ModelRecommendation.fs" />
 
     <!-- CLIPS rule engine -->
     <Compile Include="Infrastructure/Rules/ClipsNative.fs" />
     <Compile Include="Infrastructure/Rules/ClipsEnvironment.fs" />
     <Compile Include="Infrastructure/Rules/RuleEngine.fs" />
+    <!-- Unified event bus (all system events flow through here) -->
+    <Compile Include="Infrastructure/EventBus/EventBus.fs" />
+    <Compile Include="Infrastructure/EventBus/SqliteLogger.fs" />
+
+    <!-- User-defined shell hooks ({workspace}/hooks.json) -->
+    <Compile Include="Infrastructure/Hooks/UserHooks.fs" />
     <Compile Include="Infrastructure/Channels/ChannelBase.fs" />
     <Compile Include="Infrastructure/Channels/CliChannel.fs" />
     <Compile Include="Infrastructure/Channels/MarkdownParser.fs" />
@@ -65,6 +78,10 @@
     <Compile Include="Application/ContextBuilder.fs" />
     <Compile Include="Application/AgentLoop.fs" />
     <Compile Include="Application/MemoryConsolidator.fs" />
+    <Compile Include="Application/Phase1Extractor.fs" />
+    <Compile Include="Application/Phase1Service.fs" />
+    <Compile Include="Application/Phase2Consolidator.fs" />
+    <Compile Include="Application/Phase2Service.fs" />
     <Compile Include="Application/SessionActor.fs" />
     <Compile Include="Application/HeartbeatService.fs" />
     <Compile Include="Application/AutoCompactService.fs" />
@@ -74,6 +91,7 @@
     <!-- SpawnTool and LongTaskTool after SubagentManager (Application layer dep) -->
     <Compile Include="Infrastructure/Tools/SpawnTool.fs" />
     <Compile Include="Infrastructure/Tools/LongTaskTool.fs" />
+    <Compile Include="Infrastructure/Tools/RlmTool.fs" />
 
     <!-- Telegram channel adapter (after SessionActor — uses TelegramCoordinator) -->
     <Compile Include="Infrastructure/Channels/TelegramChannel.fs" />
