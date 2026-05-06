@@ -41,6 +41,8 @@
     <Compile Include="Infrastructure/DreamStoreTests.fs" />
     <Compile Include="Infrastructure/CronStoreTests.fs" />
     <Compile Include="Infrastructure/StateDbTests.fs" />
+    <Compile Include="Infrastructure/MemoryModuleTests.fs" />
+    <Compile Include="Infrastructure/UserHooksTests.fs" />
     <Compile Include="Infrastructure/JobQueueTests.fs" />
     <Compile Include="Infrastructure/CronServiceTests.fs" />
     <Compile Include="Infrastructure/CronToolTests.fs" />
