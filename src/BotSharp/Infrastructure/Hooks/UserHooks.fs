@@ -108,7 +108,12 @@ let private executeHookCommand
         for kv in env do
             psi.Environment[kv.Key] <- kv.Value
         try
-            use proc = Process.Start(psi)
+            match Process.Start(psi) with
+            | null ->
+                eprintfn "[Hook] Failed to start process: %s" command
+                return (1, "", "Process.Start returned null")
+            | proc ->
+            use proc = proc
             use cts = new Threading.CancellationTokenSource(timeoutMs)
             let! stdout = proc.StandardOutput.ReadToEndAsync(cts.Token) |> Async.AwaitTask
             let! stderr = proc.StandardError.ReadToEndAsync(cts.Token) |> Async.AwaitTask
@@ -151,7 +156,7 @@ let private toolEnv (call: ToolCall) : Map<string, string> =
     ]
     // Flatten string/number/bool args as TOOL_ARG_<name>
     for kv in call.Arguments do
-        let value =
+        let value : string | null =
             match kv.Value.ValueKind with
             | JsonValueKind.String -> kv.Value.GetString()
             | JsonValueKind.Number -> kv.Value.GetRawText()
@@ -159,7 +164,7 @@ let private toolEnv (call: ToolCall) : Map<string, string> =
             | JsonValueKind.False -> "false"
             | _ -> null
         if not (isNull value) then
-            env <- env |> Map.add (sprintf "TOOL_ARG_%s" kv.Key) value
+            env <- env |> Map.add (sprintf "TOOL_ARG_%s" kv.Key) (value |> string)
     env
 
 let private resultEnv (result: ToolResult) : Map<string, string> =
