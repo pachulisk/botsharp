@@ -344,3 +344,76 @@ let ``makeWorkerId returns a colon-separated string`` () =
 [<Fact>]
 let ``DefaultRetryRemaining equals 3`` () =
     Assert.Equal(3, DefaultRetryRemaining)
+
+// ── formatJobsOutput ─────────────────────────────────────────────────────
+
+let private emptyStats = { TotalJobs = 0; Running = 0; Done = 0; Error = 0 }
+let private mkJob (key: string) (status: string) : JobSummary =
+    { Kind = "test"; JobKey = key; Status = status; WorkerId = None
+      OwnershipToken = None; StartedAt = None; FinishedAt = None
+      LeaseUntil = None; RetryAt = None; RetryRemaining = 3
+      LastError = None; InputWatermark = None; LastSuccessWatermark = None
+      CreatedAt = 0L; UpdatedAt = 0L }
+
+[<Fact>]
+let ``formatJobsOutput with no jobs returns no-jobs placeholder`` () =
+    let result = formatJobsOutput "consolidation" emptyStats []
+    Assert.Contains("no jobs", result)
+
+[<Fact>]
+let ``formatJobsOutput header includes kind name capitalized`` () =
+    let result = formatJobsOutput "consolidation" emptyStats []
+    Assert.Contains("Consolidation", result)
+
+[<Fact>]
+let ``formatJobsOutput header includes total count`` () =
+    let stats = { emptyStats with TotalJobs = 5; Done = 3; Error = 1; Running = 1 }
+    let result = formatJobsOutput "consolidation" stats []
+    Assert.Contains("5", result)
+
+[<Fact>]
+let ``formatJobsOutput includes job keys from job list`` () =
+    let jobs = [ mkJob "sess-001" "pending"; mkJob "sess-002" "done" ]
+    let stats = { emptyStats with TotalJobs = 2; Done = 1 }
+    let result = formatJobsOutput "consolidation" stats jobs
+    Assert.Contains("sess-001", result)
+    Assert.Contains("sess-002", result)
+
+[<Fact>]
+let ``formatJobsOutput done job shows finished date or status`` () =
+    let job = { mkJob "j1" "done" with FinishedAt = Some (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) }
+    let result = formatJobsOutput "consolidation" emptyStats [ job ]
+    Assert.Contains("done", result)
+
+// ── markFailedIfUnowned ───────────────────────────────────────────────────
+
+[<Fact>]
+let ``markFailedIfUnowned returns false for non-existent job`` () =
+    use root = new SqliteConnection("Data Source=:memory:")
+    root.Open()
+    use cmd = root.CreateCommand()
+    cmd.CommandText <-
+        "CREATE TABLE IF NOT EXISTS jobs (kind TEXT NOT NULL, job_key TEXT NOT NULL, status TEXT NOT NULL, " +
+        "worker_id TEXT, ownership_token TEXT, started_at INTEGER, finished_at INTEGER, lease_until INTEGER, " +
+        "retry_at INTEGER, retry_remaining INTEGER NOT NULL, last_error TEXT, " +
+        "input_watermark INTEGER, last_success_watermark INTEGER, " +
+        "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (kind, job_key));"
+    cmd.ExecuteNonQuery() |> ignore
+    let result = markFailedIfUnowned root "test" "no-such-job" "token" "error msg" 0 |> Async.RunSynchronously
+    Assert.False(result)
+
+[<Fact>]
+let ``markFailedIfUnowned returns false when ownership token does not match`` () =
+    let openDb, root = mkTestDb ()
+    use _ = root
+    // Claim a job with one token
+    let claimed = tryClaim (openDb()) "test" "sess-1" 1L 60_000 1 |> Async.RunSynchronously
+    match claimed with
+    | Claimed token ->
+        // Try to fail with a wrong token
+        let result = markFailedIfUnowned (openDb()) "test" "sess-1" "wrong-token" "error" 0 |> Async.RunSynchronously
+        Assert.False(result)
+        // Job should still be running
+        let job = getJob (openDb()) "test" "sess-1" |> Async.RunSynchronously
+        Assert.Equal(Some "running", job |> Option.map (fun j -> j.Status))
+    | _ -> Assert.Fail("Expected Claimed outcome")
