@@ -302,3 +302,30 @@ let ``resolve falls back to openai (first provider) when DefaultProvider is unkn
     match resolve client "unknown-model-xyz" config (fun _ _ _ -> None) with
     | None   -> ()   // Key may not resolve — acceptable since DefaultProvider is invalid
     | Some p -> Assert.Equal("openai", p.Id)   // falls back to first provider (openai)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// resolveExtraHeaders
+// ═══════════════════════════════════════════════════════════════════════════
+
+[<Fact>]
+let ``resolveExtraHeaders returns empty map when no headers configured`` () =
+    let result = resolveExtraHeaders openaiSpec BotSharpConfig.defaults
+    Assert.Empty(result)
+
+[<Fact>]
+let ``resolveExtraHeaders returns headers configured for the provider`` () =
+    let headers = Map.ofList [ "X-Custom", "my-value"; "Authorization", "Bearer extra" ]
+    let config = { BotSharpConfig.defaults with
+                    ProviderExtraHeaders = Map.ofList [ "openai", headers ] }
+    let result = resolveExtraHeaders openaiSpec config
+    Assert.Equal(2, Map.count result)
+    Assert.Equal("my-value", result |> Map.find "X-Custom")
+
+[<Fact>]
+let ``resolveExtraHeaders returns empty map when headers configured for different provider`` () =
+    let headers = Map.ofList [ "X-Custom", "my-value" ]
+    let config = { BotSharpConfig.defaults with
+                    ProviderExtraHeaders = Map.ofList [ "anthropic", headers ] }
+    // asking for openai headers — not configured
+    let result = resolveExtraHeaders openaiSpec config
+    Assert.Empty(result)
