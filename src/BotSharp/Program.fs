@@ -274,8 +274,16 @@ This file stores important information that persists across sessions.
     use webHttpClient = new HttpClient(webHandler)
     webHttpClient.Timeout <- System.TimeSpan.FromSeconds(float config.WebSearchTimeout)
 
+    // Stream health check: starts with a default timeout fallback, upgraded to
+    // CLIPS-backed after ruleEngine is created (same mutable ref pattern as sendRef).
+    let mutable streamHealthCheckRef : (int -> int -> int -> string option) =
+        fun idle total _chunks ->
+            if idle >= 60 then Some (sprintf "Stream idle for %ds" idle)
+            elif total >= 300 then Some (sprintf "Stream total %ds exceeded limit" total)
+            else None
+
     let provider =
-        match resolve httpClient config.DefaultModel config with
+        match resolve httpClient config.DefaultModel config (fun idle total chunks -> streamHealthCheckRef idle total chunks) with
         | Some p -> p
         | None   ->
             eprintfn "Warning: no API key found for model '%s'." config.DefaultModel
@@ -305,7 +313,7 @@ This file stores important information that persists across sessions.
     // Resolve fallback providers from config.FallbackModels
     let fallbackProviders =
         config.FallbackModels
-        |> List.choose (fun model -> resolve httpClient model config)
+        |> List.choose (fun model -> resolve httpClient model config (fun idle total chunks -> streamHealthCheckRef idle total chunks))
         |> List.filter (fun p -> p.Id <> provider.Id)
     if not fallbackProviders.IsEmpty then
         printfn "Fallback providers: %s" (fallbackProviders |> List.map (fun p -> $"{p.Id}:{p.DefaultModel}") |> String.concat " -> ")
@@ -400,6 +408,25 @@ This file stores important information that persists across sessions.
     let msgToolPair =
         BotSharp.Infrastructure.Tools.MessageTool.allTools (fun msg -> sendRef msg)
 
+    // ask_user mutable refs (same cycle-break pattern as sendRef)
+    let mutable askUserRegisterRef : (SessionId -> PendingUserQuery -> unit) =
+        fun _ _ -> ()
+    let mutable askUserRemoveRef : (SessionId -> unit) =
+        fun _ -> ()
+    let askUserSessionIdRef : SessionId ref = ref (SessionId "cli:cli-session")
+    let askUserChannelRef   : ChannelId ref = ref (ChannelId "cli")
+    let askUserChatRef      : ChatId ref    = ref (ChatId "cli-session")
+
+    let askUserToolPair =
+        [ BotSharp.Infrastructure.Tools.AskUserTool.askUserToolSpec,
+          BotSharp.Infrastructure.Tools.AskUserTool.executeAskUser
+            (fun sid q -> askUserRegisterRef sid q)
+            (fun sid   -> askUserRemoveRef sid)
+            (fun msg   -> sendRef msg)
+            (fun ()    -> askUserSessionIdRef.Value)
+            (fun ()    -> askUserChannelRef.Value)
+            (fun ()    -> askUserChatRef.Value) ]
+
     // ── SubagentManager ───────────────────────────────────────────────────────
     // SubagentManager is created with the base tool set (file/shell/web/cron but
     // NOT spawn/message — subagents cannot recursively spawn or push messages).
@@ -461,6 +488,7 @@ This file stores important information that persists across sessions.
         FallbackProviders = fallbackProviders
         OpenStateDb       = None
         TokenTracker      = ref None
+        EventBus          = None
     }
 
     let subagentMgr =
@@ -513,6 +541,17 @@ This file stores important information that persists across sessions.
             eprintfn "[RuleEngine] CLIPS not available: %s" ex.Message
             None
 
+    // Upgrade stream health check to CLIPS-backed now that ruleEngine exists
+    match ruleEngine with
+    | Some engine ->
+        streamHealthCheckRef <- fun idleSecs totalSecs chunksReceived ->
+            BotSharp.Infrastructure.Rules.RuleEngine.assertStreamState
+                engine idleSecs totalSecs chunksReceived config.DefaultModel
+            let result = BotSharp.Infrastructure.Rules.RuleEngine.shouldAbortStream engine
+            BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
+            result
+    | None -> ()
+
     // Configuration validation via rule engine
     match ruleEngine with
     | Some engine ->
@@ -533,11 +572,32 @@ This file stores important information that persists across sessions.
             (fun extraToolPairs sysPrompt userMsg -> subagentMgr.RunStep(extraToolPairs, sysPrompt, userMsg))
             ruleEngine
 
+    // RLM tool: resolve child provider (cheap model for llm_query calls)
+    let rlmChildModel = BotSharp.Infrastructure.Tools.RlmTool.resolveRlmChildModel config
+    let rlmChildProvider =
+        match resolve httpClient rlmChildModel config (fun i t c -> streamHealthCheckRef i t c) with
+        | Some p -> p
+        | None -> provider   // fallback to primary if child model can't be resolved
+    eprintfn "[RLM] Child model: %s" rlmChildModel
+
+    let rlmToolPair =
+        BotSharp.Infrastructure.Tools.RlmTool.allTools
+            BotSharp.Application.AgentLoop.chatWithRetry
+            provider rlmChildProvider config
+
     let allToolsMap : Map<ToolName, ToolSpec * (Map<string, System.Text.Json.JsonElement> -> Async<ToolResult>)> =
         baseToolMap
         |> addToolPairs msgToolPair
         |> addToolPairs spawnToolPair
         |> addToolPairs longTaskToolPair
+        |> addToolPairs rlmToolPair
+        |> addToolPairs askUserToolPair
+        |> (fun m ->
+            match openStateDb with
+            | Some factory ->
+                BotSharp.Infrastructure.Tools.TaskTool.allTools factory
+                |> List.fold (fun acc (spec, exec) -> acc |> Map.add spec.Name (spec, exec)) m
+            | None -> m)
 
     // ── Build agent dependencies ──────────────────────────────────────────────
     let deps : AgentDependencies = {
@@ -558,10 +618,10 @@ This file stores important information that persists across sessions.
             return result
         }
         BuildSystemPrompt = fun channel wp -> async {
-            let! prompt = buildSystemPrompt config.DisabledSkills config.SystemPromptAppend channel wp
+            let! prompt = buildSystemPromptWithConfig config.DisabledSkills config.SystemPromptAppend channel wp config
             // Phase 4: track memory usage when MEMORY.md is injected into system prompt
             match openStateDb with
-            | Some factory when prompt.Contains("# Memory") ->
+            | Some factory when prompt.Contains("# Memory") || prompt.Contains("# Memory System") ->
                 try
                     use conn = factory ()
                     do! BotSharp.Infrastructure.Storage.StateDb.recordMemoryUsage conn "memory:global"
@@ -571,7 +631,13 @@ This file stores important information that persists across sessions.
         }
         Config            = config
         StreamHook        = if isGateway then NoStreaming else cliStreamHook
-        Hook              = if isGateway then AgentHook.none else cliAgentHook true config.SendToolHints
+        Hook              =
+            let baseHook = if isGateway then AgentHook.none else cliAgentHook true config.SendToolHints
+            let userHooksConfig = BotSharp.Infrastructure.Hooks.UserHooks.loadHooksConfig config.WorkspacePath
+            if not userHooksConfig.Hooks.IsEmpty then
+                eprintfn "[Hooks] Loaded %d user hook(s) from hooks.json" userHooksConfig.Hooks.Length
+            let userHook = BotSharp.Infrastructure.Hooks.UserHooks.buildUserHook userHooksConfig config.WorkspacePath (config.HookTimeout * 1000)
+            AgentHook.compose [ baseHook; userHook ]
         CronService       = Some cronSvc
         LastTokenUsage    = ref None   // overridden per session actor in createSessionActor
         CurrentIteration  = ref 0
@@ -579,6 +645,16 @@ This file stores important information that persists across sessions.
         FallbackProviders = fallbackProviders
         OpenStateDb       = openStateDb
         TokenTracker      = ref (if config.ContextWindowTokens > 0 then Some (TokenTracker.empty config.ContextWindowTokens) else None)
+        EventBus          =
+            let bus = BotSharp.Infrastructure.EventBus.EventBus.create ()
+            // Default consumer: log all events to SQLite
+            match openStateDb with
+            | Some factory ->
+                bus.Subscribe "log" (BotSharp.Infrastructure.EventBus.SqliteLogger.createConsumer factory) |> ignore
+                eprintfn "[EventBus] Started with SqliteLogger consumer"
+            | None ->
+                eprintfn "[EventBus] Started without persistence (SQLite disabled)"
+            Some bus
     }
 
     // ── Wire up the system ────────────────────────────────────────────────────
@@ -590,6 +666,10 @@ This file stores important information that persists across sessions.
     }
     cronRouteRef <- fun msg -> coordinator.Route msg
     spawnRouteRef <- routeRef   // subagent announcements go through the same coordinator
+
+    // Wire ask_user pending registry to the coordinator
+    askUserRegisterRef <- fun sid q -> coordinator.RegisterPending(sid, q)
+    askUserRemoveRef   <- fun sid   -> coordinator.RemovePending(sid)
 
     // List models that have API keys configured
     let listAvailableModels () =
@@ -625,13 +705,13 @@ This file stores important information that persists across sessions.
                 | Error msg -> return Error $"Failed to save config: {msg}"
                 | Ok () ->
                     // 4. Re-eval: resolve new provider from config (immutable)
-                    match resolve httpClient modelName newConfig with
+                    match resolve httpClient modelName newConfig (fun i t c -> streamHealthCheckRef i t c) with
                     | None -> return Error $"Failed to resolve provider for '{modelName}' after config update."
                     | Some newProvider ->
                         // 5. Rebuild immutable deps with new provider + config
                         let newFallbacks =
                             newConfig.FallbackModels
-                            |> List.choose (fun m -> resolve httpClient m newConfig)
+                            |> List.choose (fun m -> resolve httpClient m newConfig (fun i t c -> streamHealthCheckRef i t c))
                             |> List.filter (fun p -> p.Id <> newProvider.Id)
                         let newDeps = { deps with Provider = newProvider; Config = newConfig; FallbackProviders = newFallbacks }
                         // 6. Rebuild coordinator and update routing refs
@@ -870,23 +950,63 @@ This file stores important information that persists across sessions.
             },
             dreamCts.Token)
 
-    // ── AutoCompactService (optional) ─────────────────────────────────────────
+    // ── AutoCompactService (optional, requires SQLite index) ──────────────────
     let autoCompactTtl =
         if config.SessionTtlMinutes > 0 then config.SessionTtlMinutes
         elif config.MemoryWindowSize > 0 then 0
         else 0
     let autoCompactSvc =
-        BotSharp.Application.AutoCompactService.AutoCompactService(
-            deps,
-            (fun () -> coordinator.GetActiveSessionIds()),
-            autoCompactTtl)
-    autoCompactSvc.Start()
+        match openStateDb with
+        | Some factory ->
+            let svc =
+                BotSharp.Application.AutoCompactService.AutoCompactService(
+                    deps, factory,
+                    (fun () -> coordinator.GetActiveSessionIds()),
+                    autoCompactTtl)
+            svc.Start()
+            Some svc
+        | None ->
+            if autoCompactTtl > 0 then
+                eprintfn "[AutoCompact] Disabled: SQLite index not enabled"
+            None
 
-    // ── Session cleanup service (delete expired session files) ──────────────
+    // ── Session cleanup service (requires SQLite index) ─────────────────────
     let sessionCleanupSvc =
-        BotSharp.Application.SessionCleanupService.SessionCleanupService(
-            config.WorkspacePath, config.SessionCleanupDays, ruleEngine)
-    sessionCleanupSvc.Start()
+        match openStateDb with
+        | Some factory ->
+            let svc =
+                BotSharp.Application.SessionCleanupService.SessionCleanupService(
+                    factory, config.WorkspacePath, config.SessionCleanupDays)
+            svc.Start()
+            Some svc
+        | None ->
+            if config.SessionCleanupDays > 0 then
+                eprintfn "[SessionCleanup] Disabled: SQLite index not enabled"
+            None
+
+    // ── Phase 1 extraction service (two-phase memory pipeline) ────────────────
+    let phase1Svc =
+        match openStateDb with
+        | Some factory when config.MemoryWindowSize > 0 ->
+            let svc =
+                BotSharp.Application.Phase1Service.Phase1Service(
+                    factory, deps,
+                    (fun () -> coordinator.GetActiveSessionIds()),
+                    intervalMinutes = 15)
+            svc.Start()
+            Some svc
+        | _ -> None
+
+    // ── Phase 2 consolidation service (cross-session, global singleton) ───────
+    let phase2Svc =
+        match openStateDb with
+        | Some factory when config.Phase2Enabled ->
+            let svc =
+                BotSharp.Application.Phase2Service.Phase2Service(
+                    factory, deps, intervalMinutes = 30)
+            svc.Start()
+            Some svc
+        | _ -> None
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Mode dispatch: pocket vs gateway (headless) vs CLI (interactive)
@@ -971,8 +1091,8 @@ This file stores important information that persists across sessions.
             startPocket pocketCoordinator port rpc |> Async.RunSynchronously
 
             rpc.Dispose()
-            autoCompactSvc.Stop()
-            sessionCleanupSvc.Stop()
+            autoCompactSvc |> Option.iter (fun s -> s.Stop())
+            sessionCleanupSvc |> Option.iter (fun s -> s.Stop())
             disposeMcp ()
             0
 
@@ -1125,8 +1245,10 @@ This file stores important information that persists across sessions.
         waServerOpt |> Option.iter (fun s -> s.Stop())
         mcServerOpt |> Option.iter (fun (s, cts) -> cts.Cancel(); s.Stop())
         iaServerOpt |> Option.iter (fun s -> s.Stop())
-        autoCompactSvc.Stop()
-        sessionCleanupSvc.Stop()
+        autoCompactSvc |> Option.iter (fun s -> s.Stop())
+        sessionCleanupSvc |> Option.iter (fun s -> s.Stop())
+        phase1Svc |> Option.iter (fun s -> s.Stop())
+        phase2Svc |> Option.iter (fun s -> s.Stop())
         disposeMcp ()
         0
 
@@ -1258,7 +1380,9 @@ This file stores important information that persists across sessions.
         fsServerOpt  |> Option.iter (fun s -> s.Stop())
         dtServerOpt  |> Option.iter (fun s -> s.Stop())
         iaServerOpt  |> Option.iter (fun s -> s.Stop())
-        autoCompactSvc.Stop()
-        sessionCleanupSvc.Stop()
+        autoCompactSvc |> Option.iter (fun s -> s.Stop())
+        sessionCleanupSvc |> Option.iter (fun s -> s.Stop())
+        phase1Svc |> Option.iter (fun s -> s.Stop())
+        phase2Svc |> Option.iter (fun s -> s.Stop())
         disposeMcp ()
         0

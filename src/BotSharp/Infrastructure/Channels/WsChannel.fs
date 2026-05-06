@@ -315,7 +315,11 @@ type private WsCoordinator(baseDeps: AgentDependencies) =
     let mkActor (chatId: string) (sendDelta: string -> Async<unit>) (onDone: bool -> Async<unit>) =
         let hook =
             StreamingHook(
-                onDelta     = sendDelta,
+                onDelta     = (fun delta ->
+                    match delta with
+                    | TextDelta t -> sendDelta t
+                    | ThinkingDelta _ -> async { () }   // thinking not sent over WS (yet)
+                    | ToolArgDelta _ -> async { () }),
                 onStreamEnd = onDone)
         let deps = { baseDeps with StreamHook = hook }
         createSessionActor (sid chatId) deps

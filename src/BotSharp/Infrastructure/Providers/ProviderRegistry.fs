@@ -35,7 +35,7 @@ let providers : NonEmptyList<ProviderSpec> =
             EnvKeyName   = "ANTHROPIC_API_KEY" }
 
           { Id           = "deepseek"
-            Keywords     = [ "deepseek-v4-"; "deepseek-r"; "deepseek-chat"; "deepseek-reasoner"; "deepseek" ]
+            Keywords     = [ "deepseek-v4-"; "deepseek-r"; "deepseek-chat"; "deepseek-reasoner"; "deepseek-v4-flash"; "deepseek-v4-pro"; "deepseek" ]
             Backend      = OpenAICompatBackend
             IsGateway    = false
             Capabilities = Set.ofList [ FunctionCalling; ExtendedThinking; Streaming; StreamUsageTracking ]
@@ -320,40 +320,41 @@ let resolveExtraHeaders (spec: ProviderSpec) (config: BotSharpConfig) : Map<stri
 
 /// Build an LLMProvider for the given spec, using a shared HttpClient.
 /// Returns None when no API key is available.
+///
+/// `streamHealthCheck` — called periodically during SSE streaming.
+/// Receives (idleSeconds, totalSeconds, chunksReceived) and returns Some(reason) to abort.
+/// This enables CLIPS rules to evaluate stream health (timeout is just one rule).
 let buildProvider
-    (client : HttpClient)
-    (model  : string)
-    (spec   : ProviderSpec)
-    (config : BotSharpConfig)
+    (client            : HttpClient)
+    (model             : string)
+    (spec              : ProviderSpec)
+    (config            : BotSharpConfig)
+    (streamHealthCheck : int -> int -> int -> string option)
     : LLMProvider option =
     match resolveApiKey spec config with
     | None     -> None
     | Some key ->
         let baseUrl = resolveBaseUrl spec config
-        // StreamUsageTracking (stream_options.include_usage=true) is a provider-specific
-        // extension.  Strip it when the user has overridden the base_url for this provider
-        // in their config — that indicates they've pointed the spec at a third-party
-        // endpoint (e.g. iFlytek MaaS for "openai") that may not support the extension.
-        // When the default registry URL is in use, trust the capability declared in the spec.
         let userOverrodeBaseUrl = config.BaseUrls |> Map.containsKey spec.Id
         let caps =
             if userOverrodeBaseUrl then spec.Capabilities |> Set.remove StreamUsageTracking
             else spec.Capabilities
         let extraHeaders = resolveExtraHeaders spec config
-        Some (createProvider client spec.Id baseUrl key model caps config.ProviderRetryMode extraHeaders)
+        Some (createProvider client spec.Id baseUrl key model caps config.ProviderRetryMode extraHeaders streamHealthCheck)
 
 /// Resolve a provider for the requested model.
 /// Falls back to the configured default provider if no keyword match is found.
 let resolve
-    (client : HttpClient)
-    (model  : string)
-    (config : BotSharpConfig)
+    (client            : HttpClient)
+    (model             : string)
+    (config            : BotSharpConfig)
+    (streamHealthCheck : int -> int -> int -> string option)
     : LLMProvider option =
+    let healthCheck = streamHealthCheck
     let spec =
         match detectProvider model with
         | Some s -> s
         | None   ->
-            // Fall back to configured default provider
             providers |> NonEmptyList.tryFind (fun s -> s.Id = config.DefaultProvider)
             |> Option.defaultValue (NonEmptyList.head providers)
-    buildProvider client model spec config
+    buildProvider client model spec config healthCheck

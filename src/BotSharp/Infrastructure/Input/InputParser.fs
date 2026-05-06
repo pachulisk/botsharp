@@ -59,6 +59,14 @@ let private pSearchSessions : Parser<UserInput, unit> =
 let private pRebuildIndex : Parser<UserInput, unit> =
     pstring "/rebuild-index" .>> spaces .>> eof >>% Command RebuildIndex
 
+let private pShowJobs : Parser<UserInput, unit> =
+    pstring "/jobs" >>. spaces >>. opt (many1Chars (noneOf " \t\r\n")) .>> eof
+    |>> (fun kindOpt -> Command (ShowJobs kindOpt))
+
+let private pTaskCmd : Parser<UserInput, unit> =
+    pstring "/task" >>. spaces >>. opt (manyChars anyChar) .>> eof
+    |>> (fun subOpt -> Command (TaskCmd (subOpt |> Option.bind (fun s -> if s.Trim() = "" then None else Some (s.Trim())))))
+
 // ── Optional SHA argument: lowercase hex only ([0-9a-f]+) ────────────────
 // Restricts to lowercase hex so that /dream-log ZZZ is rejected at parse
 // time rather than silently returning no results at lookup time.
@@ -91,6 +99,9 @@ let private pSlashCommand : Parser<UserInput, unit> =
         attempt pListSessions
         attempt pSearchSessions
         attempt pRebuildIndex
+        attempt pShowJobs
+        attempt pTaskCmd
+        attempt (pstring "/events" >>. spaces >>. opt (many1Chars (noneOf " \t\r\n")) .>> eof |>> (fun c -> Command (ShowEvents c)))
         attempt pDream
     ]
 

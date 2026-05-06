@@ -196,10 +196,13 @@ type PocketRpcClient(socketName: string) =
 
 let pocketStreamHook (rpc: PocketRpcClient) (agentId: string) (sessionKey: string option ref) : AgentStreamHook =
     StreamingHook(
-        // onDelta: each token increment
-        (fun text -> async {
-            let sk = sessionKey.Value
-            do! rpc.ChatSend(text, agentId, ?sessionKey = sk, isProgress = true)
+        // onDelta: each token increment (thinking suppressed for pocket)
+        (fun delta -> async {
+            match delta with
+            | TextDelta text ->
+                let sk = sessionKey.Value
+                do! rpc.ChatSend(text, agentId, ?sessionKey = sk, isProgress = true)
+            | ThinkingDelta _ | ToolArgDelta _ -> ()
         }),
         // onStreamEnd: final newline
         (fun _hasTools -> async { () })

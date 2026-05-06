@@ -319,6 +319,9 @@ let chat
 
 /// Send a streaming POST request; call emitter for each StreamEvent.
 /// Returns Ok() when the stream completes normally, or Error on failure.
+///
+/// `streamHealthCheck` — called every ~10s during idle periods. Returns Some(reason) to abort.
+/// This callback enables CLIPS rules to evaluate stream health (timeout is just one rule).
 let chatStream
     (client             : HttpClient)
     (baseUrl            : string)
@@ -329,6 +332,7 @@ let chatStream
     (messages           : Message list)
     (tools              : ToolSpec list)
     (includeStreamUsage : bool)
+    (streamHealthCheck  : int -> int -> int -> string option)
     (emitter            : StreamEvent -> Async<unit>)
     : AsyncResult<unit, LlmError> =
     asyncResult {
@@ -367,40 +371,77 @@ let chatStream
 
             use reader = new StreamReader(stream)
 
-            // Tail-recursive SSE line processor (AsyncResultBuilder has no While)
+            // Stream health tracking state
+            let startTime = DateTimeOffset.UtcNow
+            let mutable lastDataTime = DateTimeOffset.UtcNow
+            let mutable chunksReceived = 0
+            let checkIntervalMs = 10_000  // health check every 10s
+
+            // Tail-recursive SSE line processor with idle health checks.
+            // Uses CancellationToken on ReadLineAsync so reads never block forever.
+            // On each idle check, calls streamHealthCheck which can trigger CLIPS
+            // rules (stream timeout is just one possible rule).
             let rec readLoop () : AsyncResult<unit, LlmError> =
                 asyncResult {
-                    let! line = reader.ReadLineAsync() |> Async.AwaitTask |> AsyncResult.ofAsync
-                    match line with
-                    | null -> return ()
-                    | line ->
-                        match parseSseLine line with
-                        | Result.Ok DoneLine    -> return ()
-                        | Result.Ok CommentLine -> return! readLoop ()
-                        | Result.Ok (DataLine json) ->
-                            try
-                                use doc = JsonDocument.Parse(json)
-                                match parseStreamChunk doc.RootElement with
-                                | Result.Ok (Some evt) ->
-                                    do! emitter evt |> AsyncResult.ofAsync
-                                    return! readLoop ()
-                                | Result.Ok None ->
-                                    return! readLoop ()
-                                | Result.Error pe ->
+                    use readCts = new Threading.CancellationTokenSource(checkIntervalMs)
+                    let! readResult =
+                        reader.ReadLineAsync(readCts.Token).AsTask()
+                        |> Async.AwaitTask
+                        |> Async.Catch
+                        |> AsyncResult.ofAsync
+                    match readResult with
+                    | Choice2Of2 (:? OperationCanceledException) ->
+                        // Check interval fired — ask CLIPS (or caller) whether to abort
+                        let idleSecs = int (DateTimeOffset.UtcNow - lastDataTime).TotalSeconds
+                        let totalSecs = int (DateTimeOffset.UtcNow - startTime).TotalSeconds
+                        match streamHealthCheck idleSecs totalSecs chunksReceived with
+                        | Some reason ->
+                            // CLIPS decided to abort the stream
+                            return! AsyncResult.ofResult (Result.Error {
+                                Kind = Timeout StreamIdleTimeout
+                                RawMessage = reason
+                                ProviderCode = None })
+                        | None ->
+                            // CLIPS says continue — retry the read
+                            return! readLoop ()
+                    | Choice2Of2 ex ->
+                        return! AsyncResult.ofResult (Result.Error {
+                            Kind = ConnectionFailed ex.Message
+                            RawMessage = ex.Message
+                            ProviderCode = None })
+                    | Choice1Of2 line ->
+                        match line with
+                        | null -> return ()
+                        | line ->
+                            lastDataTime <- DateTimeOffset.UtcNow
+                            match parseSseLine line with
+                            | Result.Ok DoneLine    -> return ()
+                            | Result.Ok CommentLine -> return! readLoop ()
+                            | Result.Ok (DataLine json) ->
+                                try
+                                    use doc = JsonDocument.Parse(json)
+                                    match parseStreamChunk doc.RootElement with
+                                    | Result.Ok (Some evt) ->
+                                        chunksReceived <- chunksReceived + 1
+                                        do! emitter evt |> AsyncResult.ofAsync
+                                        return! readLoop ()
+                                    | Result.Ok None ->
+                                        return! readLoop ()
+                                    | Result.Error pe ->
+                                        let err = { Kind = MalformedResponse pe
+                                                    RawMessage = json.[..min 200 (json.Length-1)]
+                                                    ProviderCode = None }
+                                        do! emitter (StreamError err) |> AsyncResult.ofAsync
+                                        return! readLoop ()
+                                with ex ->
+                                    let pe = JsonParseError (ex.Message, 0)
                                     let err = { Kind = MalformedResponse pe
-                                                RawMessage = json.[..min 200 (json.Length-1)]
+                                                RawMessage = line.[..min 200 (line.Length-1)]
                                                 ProviderCode = None }
                                     do! emitter (StreamError err) |> AsyncResult.ofAsync
                                     return! readLoop ()
-                            with ex ->
-                                let pe = JsonParseError (ex.Message, 0)
-                                let err = { Kind = MalformedResponse pe
-                                            RawMessage = line.[..min 200 (line.Length-1)]
-                                            ProviderCode = None }
-                                do! emitter (StreamError err) |> AsyncResult.ofAsync
+                            | Result.Error _ ->
                                 return! readLoop ()
-                        | Result.Error _ ->
-                            return! readLoop ()  // ignore malformed SSE lines
                 }
 
             return! readLoop ()
@@ -411,14 +452,15 @@ let chatStream
 /// Create an LLMProvider record-of-functions for a given endpoint and API key.
 /// The HttpClient is shared across all requests (caller owns its lifetime).
 let createProvider
-    (client          : HttpClient)
-    (providerId      : string)
-    (baseUrl         : string)
-    (apiKey          : ApiKey)
-    (model           : string)
-    (caps            : Set<ProviderCapability>)
-    (retryMode       : string)
-    (extraHeaders    : Map<string, string>)
+    (client             : HttpClient)
+    (providerId         : string)
+    (baseUrl            : string)
+    (apiKey             : ApiKey)
+    (model              : string)
+    (caps               : Set<ProviderCapability>)
+    (retryMode          : string)
+    (extraHeaders       : Map<string, string>)
+    (streamHealthCheck  : int -> int -> int -> string option)
     : LLMProvider =
     let retryPolicy =
         match retryMode with
@@ -434,4 +476,4 @@ let createProvider
 
       ChatStream = fun settings messages tools emitter ->
           let includeUsage = caps.Contains StreamUsageTracking
-          chatStream client baseUrl apiKey model extraHeaders settings messages tools includeUsage emitter }
+          chatStream client baseUrl apiKey model extraHeaders settings messages tools includeUsage streamHealthCheck emitter }

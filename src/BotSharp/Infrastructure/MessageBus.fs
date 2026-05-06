@@ -260,6 +260,66 @@ Commands:
                     with ex -> printfn "\nRebuild error: %s" ex.Message
                 return! loop ()
 
+            | Command (ShowJobs kindOpt) ->
+                match openStateDb with
+                | None -> printfn "\nSQLite index not enabled."
+                | Some factory ->
+                    try
+                        let kind = kindOpt |> Option.defaultValue JobKind.Consolidation
+                        use conn = factory ()
+                        let! stats = BotSharp.Infrastructure.Storage.JobQueue.getJobStats conn kind
+                        let! jobs = BotSharp.Infrastructure.Storage.JobQueue.listJobs conn kind None 20
+                        printfn "\n%s" (BotSharp.Infrastructure.Storage.JobQueue.formatJobsOutput kind stats jobs)
+                    with ex -> printfn "\nJob query error: %s" ex.Message
+                return! loop ()
+
+            | Command (TaskCmd subOpt) ->
+                match openStateDb with
+                | None -> printfn "\nSQLite index not enabled."
+                | Some factory ->
+                    try
+                        use conn = factory ()
+                        let sub = subOpt |> Option.map (fun s -> s.Trim()) |> Option.defaultValue ""
+                        if sub.StartsWith("add ") then
+                            let subject = sub.[4..].Trim()
+                            if subject <> "" then
+                                let! id = BotSharp.Infrastructure.Storage.StateDb.createTask conn None subject None "user"
+                                printfn "\nCreated task %s: %s" id subject
+                            else printfn "\nUsage: /task add <description>"
+                        elif sub.StartsWith("done ") then
+                            let id = sub.[5..].Trim()
+                            let! ok = BotSharp.Infrastructure.Storage.StateDb.updateTask conn id (Some "completed") None
+                            if ok then printfn "\nTask %s marked completed." id
+                            else printfn "\nTask %s not found." id
+                        elif sub = "clear" then
+                            let! n = BotSharp.Infrastructure.Storage.StateDb.clearCompletedTasks conn
+                            printfn "\nCleared %d completed task(s)." n
+                        else
+                            let! tasks = BotSharp.Infrastructure.Storage.StateDb.listTasks conn None 50
+                            if tasks.IsEmpty then printfn "\nNo tasks."
+                            else
+                                let pending = tasks |> List.filter (fun t -> t.Status = "pending") |> List.length
+                                let inProg  = tasks |> List.filter (fun t -> t.Status = "in_progress") |> List.length
+                                let completed = tasks |> List.filter (fun t -> t.Status = "completed") |> List.length
+                                printfn "\nTasks (%d total: %d pending, %d in_progress, %d completed)" tasks.Length pending inProg completed
+                                printfn "%s" (String.replicate 54 "\u2500")
+                                for t in tasks do
+                                    let icon = match t.Status with "completed" -> "\u2713" | "in_progress" -> "\u25C9" | _ -> "\u25CB"
+                                    printfn "  %s %s  %-40s %s" icon t.Id (if t.Subject.Length > 40 then t.Subject.[..39] + "..." else t.Subject) t.Status
+                    with ex -> printfn "\nTask error: %s" ex.Message
+                return! loop ()
+
+            | Command (ShowEvents catOpt) ->
+                match openStateDb with
+                | None -> printfn "\nSQLite index not enabled."
+                | Some factory ->
+                    try
+                        use conn = factory ()
+                        let events = BotSharp.Infrastructure.EventBus.SqliteLogger.queryEvents conn catOpt None 20
+                        printfn "\n%s" (BotSharp.Infrastructure.EventBus.SqliteLogger.formatEvents events)
+                    with ex -> printfn "\nEvent query error: %s" ex.Message
+                return! loop ()
+
             // /clear and /history are routed to the coordinator (handled in SessionActor)
             | Command ClearHistory | Command (ShowHistory _) ->
                 let! result = coordinator.Route msg

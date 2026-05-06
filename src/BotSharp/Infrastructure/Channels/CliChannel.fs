@@ -24,10 +24,35 @@ let private cliUser    = UserId    "user"
 let private cliChat    = ChatId    "cli-session"
 
 /// AgentStreamHook for the CLI: print deltas directly to stdout.
+/// ThinkingDelta is rendered in dim italic (ANSI escape codes) to distinguish
+/// from regular text content, matching DeepSeek-TUI's visual style.
 let cliStreamHook : AgentStreamHook =
+    let mutable inThinking = false
     StreamingHook(
-        (fun text     -> async { printf "%s" text; Console.Out.Flush() }),
-        (fun hasTools -> async { if not hasTools then printfn "" })
+        (fun delta -> async {
+            match delta with
+            | TextDelta t ->
+                if inThinking then
+                    // Transition from thinking to text: reset styling, add newline separator
+                    printf "\x1b[0m\n"
+                    inThinking <- false
+                printf "%s" t
+                Console.Out.Flush()
+            | ThinkingDelta t ->
+                if not inThinking then
+                    // Start thinking: dim italic yellow
+                    printf "\x1b[2;3;33m"
+                    inThinking <- true
+                printf "%s" t
+                Console.Out.Flush()
+            | ToolArgDelta _ -> ()
+        }),
+        (fun hasTools -> async {
+            if inThinking then
+                printf "\x1b[0m"   // reset styling
+                inThinking <- false
+            if not hasTools then printfn ""
+        })
     )
 
 /// AgentHook for the CLI: prints tool hints before each tool round.
@@ -45,12 +70,20 @@ let cliAgentHook (isStreaming: bool) (sendToolHints: bool) : AgentHook =
                         Console.Out.Flush()
             } }
 
-/// Render inline keyboard buttons as ASCII rows (CLI fallback for Telegram buttons).
+/// Render inline keyboard buttons as a numbered list (for ask_user interactive selection)
+/// or as ASCII rows (for generic button rendering).
 let private renderButtons (buttons: string list list) : string =
     if buttons.IsEmpty then ""
     else
-        let rows = buttons |> List.map (fun row -> "  [ " + String.concat " | " row + " ]")
-        "\n" + String.concat "\n" rows
+        // Single row with multiple items → numbered list (ask_user pattern)
+        match buttons with
+        | [ options ] when options.Length >= 2 ->
+            let lines = options |> List.mapi (fun i opt -> sprintf "  %d. %s" (i + 1) opt)
+            "\n" + String.concat "\n" lines
+        | _ ->
+            // Multi-row or single-item rows → ASCII button rows
+            let rows = buttons |> List.map (fun row -> "  [ " + String.concat " | " row + " ]")
+            "\n" + String.concat "\n" rows
 
 /// Create a ChannelPort for the CLI.
 let createCliPort () : ChannelPort = {

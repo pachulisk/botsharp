@@ -186,6 +186,60 @@ let createSessionActor
                                 |> String.concat "\n"
                     channel.Reply (Result.Ok (historyText, lastSnap |> Option.defaultValue (SessionSnapshot.empty (SessionId "none") DateTimeOffset.UtcNow)))
                     return! loop lastSnap pendingSummary
+                | Command (ShowJobs kindOpt) ->
+                    // /jobs: query job stats from SQLite. Works from any channel.
+                    let jobsText =
+                        match deps'.OpenStateDb with
+                        | None -> "(SQLite index not enabled)"
+                        | Some factory ->
+                            try
+                                let kind = kindOpt |> Option.defaultValue JobKind.Consolidation
+                                use conn = factory ()
+                                let stats = BotSharp.Infrastructure.Storage.JobQueue.getJobStats conn kind |> Async.RunSynchronously
+                                let jobs = BotSharp.Infrastructure.Storage.JobQueue.listJobs conn kind None 20 |> Async.RunSynchronously
+                                BotSharp.Infrastructure.Storage.JobQueue.formatJobsOutput kind stats jobs
+                            with ex -> sprintf "Job query error: %s" ex.Message
+                    channel.Reply (Result.Ok (jobsText, lastSnap |> Option.defaultValue (SessionSnapshot.empty (SessionId "none") DateTimeOffset.UtcNow)))
+                    return! loop lastSnap pendingSummary
+                | Command (TaskCmd subOpt) ->
+                    let taskText =
+                        match deps'.OpenStateDb with
+                        | None -> "(SQLite index not enabled)"
+                        | Some factory ->
+                            try
+                                use conn = factory ()
+                                let sub = subOpt |> Option.map (fun s -> s.Trim()) |> Option.defaultValue ""
+                                if sub.StartsWith("add ") then
+                                    let subject = sub.[4..].Trim()
+                                    if subject <> "" then
+                                        let id = BotSharp.Infrastructure.Storage.StateDb.createTask conn None subject None "user" |> Async.RunSynchronously
+                                        sprintf "Created task %s: %s" id subject
+                                    else "Usage: /task add <description>"
+                                elif sub.StartsWith("done ") then
+                                    let id = sub.[5..].Trim()
+                                    let ok = BotSharp.Infrastructure.Storage.StateDb.updateTask conn id (Some "completed") None |> Async.RunSynchronously
+                                    if ok then sprintf "Task %s marked completed." id else sprintf "Task %s not found." id
+                                elif sub = "clear" then
+                                    let n = BotSharp.Infrastructure.Storage.StateDb.clearCompletedTasks conn |> Async.RunSynchronously
+                                    sprintf "Cleared %d completed task(s)." n
+                                else
+                                    let tasks = BotSharp.Infrastructure.Storage.StateDb.listTasks conn None 50 |> Async.RunSynchronously
+                                    BotSharp.Infrastructure.Tools.TaskTool.formatTaskList tasks
+                            with ex -> sprintf "Task error: %s" ex.Message
+                    channel.Reply (Result.Ok (taskText, lastSnap |> Option.defaultValue (SessionSnapshot.empty (SessionId "none") DateTimeOffset.UtcNow)))
+                    return! loop lastSnap pendingSummary
+                | Command (ShowEvents catOpt) ->
+                    let eventsText =
+                        match deps'.OpenStateDb with
+                        | None -> "(SQLite index not enabled)"
+                        | Some factory ->
+                            try
+                                use conn = factory ()
+                                let events = BotSharp.Infrastructure.EventBus.SqliteLogger.queryEvents conn catOpt None 20
+                                BotSharp.Infrastructure.EventBus.SqliteLogger.formatEvents events
+                            with ex -> sprintf "Event query error: %s" ex.Message
+                    channel.Reply (Result.Ok (eventsText, lastSnap |> Option.defaultValue (SessionSnapshot.empty (SessionId "none") DateTimeOffset.UtcNow)))
+                    return! loop lastSnap pendingSummary
                 | _ -> ()
                 // Consume pendingSummary this turn (inject into runtime context, then clear).
                 let! result = runAgentLoop inbound deps' pendingSummary
@@ -224,35 +278,54 @@ let createSessionActor
 
 type AgentCoordinator(deps: AgentDependencies) =
     let actors = ConcurrentDictionary<SessionId, MailboxProcessor<SessionActorMsg>>()
+    let pendingQueries = ConcurrentDictionary<SessionId, PendingUserQuery>()
 
     /// Get or create the actor for a given session ID.
     member private _.GetOrCreate(sid: SessionId) =
         actors.GetOrAdd(sid, fun _ -> createSessionActor sid deps)
 
+    /// Register a pending ask_user query for a session.
+    member _.RegisterPending(sid: SessionId, query: PendingUserQuery) =
+        pendingQueries[sid] <- query
+
+    /// Remove a pending query (e.g. on timeout).
+    member _.RemovePending(sid: SessionId) =
+        pendingQueries.TryRemove(sid) |> ignore
+
+    /// Try to resolve a pending ask_user query with the user's response.
+    /// Returns true if a pending query was found and resolved.
+    member _.TryResolvePending(sid: SessionId, response: string) : bool =
+        match pendingQueries.TryRemove(sid) with
+        | true, query -> query.Tcs.TrySetResult(response) |> ignore; true
+        | false, _ -> false
+
     /// Route an inbound message to the correct session actor and await the reply.
-    /// Parses the raw (text, snapshot) pair into AgentResult at this boundary:
-    ///   WantsStreaming = true  → StreamedResponse (text already shown via OnDelta)
-    ///   WantsStreaming = false → PlainResponse     (consumer must display the text)
+    /// Pre-check: if there's a pending ask_user query for this session,
+    /// complete the TCS with the user's text and return silently (the agent loop
+    /// will resume and produce its own response when the tool completes).
     member this.Route(inbound: InboundMessage) : Async<Result<AgentResult, AgentError>> =
         async {
-            // unified_session: when enabled, route all messages to "unified:default" —
-            // unless the message carries an explicit SessionKeyOverride (e.g. Telegram thread).
-            // Python parity: AgentLoop._dispatch() key-rewriting logic.
             let sid =
                 if deps.Config.UnifiedSession && inbound.SessionKeyOverride.IsNone then
                     SessionId "unified:default"
                 else
                     sessionId inbound
-            let actor = this.GetOrCreate(sid)
-            let! result = actor.PostAndAsyncReply(fun ch -> ProcessInput(inbound, ch))
-            match result with
-            | Result.Ok (text, _) ->
-                let agentResult =
-                    match deps.StreamHook with
-                    | StreamingHook _ -> StreamedResponse text   // text already shown via OnDelta
-                    | NoStreaming      -> PlainResponse text      // consumer must display it
-                return Result.Ok agentResult
-            | Result.Error e -> return Result.Error e
+            // Intercept: resolve pending ask_user query before routing to actor
+            match inbound.Input with
+            | ChatMessage (text, _) when this.TryResolvePending(sid, text) ->
+                // User's response forwarded to pending tool; agent loop will resume
+                return Result.Ok (PlainResponse "")
+            | _ ->
+                let actor = this.GetOrCreate(sid)
+                let! result = actor.PostAndAsyncReply(fun ch -> ProcessInput(inbound, ch))
+                match result with
+                | Result.Ok (text, _) ->
+                    let agentResult =
+                        match deps.StreamHook with
+                        | StreamingHook _ -> StreamedResponse text
+                        | NoStreaming      -> PlainResponse text
+                    return Result.Ok agentResult
+                | Result.Error e -> return Result.Error e
         }
 
     /// Get the current snapshot for a session (returns None if not yet active).
@@ -293,6 +366,10 @@ type AgentCoordinator(deps: AgentDependencies) =
 
     /// Shut down all session actors (called on application exit).
     member _.ShutdownAll() =
+        // Cancel all pending ask_user queries (unblocks waiting tools)
+        for kv in pendingQueries do
+            kv.Value.Tcs.TrySetCanceled() |> ignore
+        pendingQueries.Clear()
         for kv in actors do
             kv.Value.Post Shutdown
         actors.Clear()

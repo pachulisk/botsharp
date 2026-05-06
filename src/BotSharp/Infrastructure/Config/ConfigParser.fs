@@ -289,6 +289,37 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
     // dream_annotate_line_ages (Python: dream.annotate_line_ages; true = annotate with git-blame ages)
     let dreamAnnotateLineAges = tryGetBool "dream_annotate_line_ages" el |> Option.defaultValue d.DreamAnnotateLineAges
 
+    // Memory progressive disclosure thresholds (Codex: read_path.md pattern)
+    let memorySummaryTokenLimit = tryGetInt "memory_summary_token_limit" el |> Option.defaultValue d.MemorySummaryTokenLimit
+    let memoryDirectInjectLimit = tryGetInt "memory_direct_inject_limit" el |> Option.defaultValue d.MemoryDirectInjectLimit
+    let memoryCitationTracking  = tryGetBool "memory_citation_tracking" el |> Option.defaultValue d.MemoryCitationTracking
+    let memoryCitationStrip     = tryGetBool "memory_citation_strip" el |> Option.defaultValue d.MemoryCitationStrip
+
+    // Two-phase memory pipeline (Codex: Phase 1 per-session extraction + Phase 2 cross-session consolidation)
+    let phase1Model           = tryGetString "phase1_model" el
+    let phase1ReasoningEffort =
+        tryGetString "phase1_reasoning_effort" el
+        |> Option.bind (fun s ->
+            match s.Trim().ToLowerInvariant() with
+            | "low" -> Some Low | "medium" -> Some Medium | "high" -> Some High | "adaptive" -> Some Adaptive | _ -> None)
+    let phase1MinIdleMinutes  = tryGetInt "phase1_min_idle_minutes" el |> Option.defaultValue d.Phase1MinIdleMinutes
+    let phase1MaxPerPass      = tryGetInt "phase1_max_per_pass" el |> Option.defaultValue d.Phase1MaxPerPass
+    let phase1MaxUnusedDays   = tryGetInt "phase1_max_unused_days" el |> Option.defaultValue d.Phase1MaxUnusedDays
+    let phase2Model           = tryGetString "phase2_model" el
+    let phase2ReasoningEffort =
+        tryGetString "phase2_reasoning_effort" el
+        |> Option.bind (fun s ->
+            match s.Trim().ToLowerInvariant() with
+            | "low" -> Some Low | "medium" -> Some Medium | "high" -> Some High | "adaptive" -> Some Adaptive | _ -> None)
+    let phase2MaxRawMemories  = tryGetInt "phase2_max_raw_memories" el |> Option.defaultValue d.Phase2MaxRawMemories
+    let phase2CooldownHours   = tryGetInt "phase2_cooldown_hours" el |> Option.defaultValue d.Phase2CooldownHours
+    let phase2Enabled         = tryGetBool "phase2_enabled" el |> Option.defaultValue d.Phase2Enabled
+
+    // RLM (Recursive Language Model) tool
+    let rlmChildModel = tryGetString "rlm_child_model" el
+    let rlmMaxDepth   = tryGetInt "rlm_max_depth" el |> Option.defaultValue d.RlmMaxDepth |> max 0
+    let hookTimeout   = tryGetInt "hook_timeout" el |> Option.defaultValue d.HookTimeout |> max 5
+
     // provider_extra_headers (Python: providers.<id>.extra_headers)
     // Format: { "openai": { "My-Header": "value" }, "anthropic": { ... } }
     let providerExtraHeaders =
@@ -787,6 +818,23 @@ let parseConfig (doc: JsonDocument) : Result<BotSharpConfig, ParseError list> =
             TranscriptionProvider  = transcriptionProvider
             TranscriptionLanguage  = transcriptionLanguage
             DreamAnnotateLineAges  = dreamAnnotateLineAges
+            MemorySummaryTokenLimit = memorySummaryTokenLimit
+            MemoryDirectInjectLimit = memoryDirectInjectLimit
+            MemoryCitationTracking  = memoryCitationTracking
+            MemoryCitationStrip     = memoryCitationStrip
+            Phase1Model             = phase1Model
+            Phase1ReasoningEffort   = phase1ReasoningEffort
+            Phase1MinIdleMinutes    = phase1MinIdleMinutes
+            Phase1MaxPerPass        = phase1MaxPerPass
+            Phase1MaxUnusedDays     = phase1MaxUnusedDays
+            Phase2Model             = phase2Model
+            Phase2ReasoningEffort   = phase2ReasoningEffort
+            Phase2MaxRawMemories    = phase2MaxRawMemories
+            Phase2CooldownHours     = phase2CooldownHours
+            Phase2Enabled           = phase2Enabled
+            RlmChildModel           = rlmChildModel
+            RlmMaxDepth             = rlmMaxDepth
+            HookTimeout             = hookTimeout
             ProviderExtraHeaders   = providerExtraHeaders
             ApiPort                = apiPort
             ApiTimeoutSeconds      = apiTimeoutSeconds

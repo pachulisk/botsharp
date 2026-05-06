@@ -121,41 +121,102 @@ let private startTypingLoop (bot: ITelegramBotClient) (chatId: int64) (ct: Cance
 // § 5  Streaming output — delta handler and stream-end handler
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Thinking stream state: tracks the separate thinking message in Telegram.
+/// ThinkingIdle = no thinking message sent yet.
+/// ThinkingSent = a thinking message is actively streaming.
+type ThinkingStreamState =
+    | ThinkingIdle
+    | ThinkingSent of MsgId: int * Accumulated: string * LastEdit: DateTimeOffset
+
 let private onStreamDelta
-    (bot        : ITelegramBotClient)
-    (tgCfg      : TelegramConfig)
-    (chatId     : int64)
-    (stateRef   : StreamState ref)
-    (replyToRef : int option ref)
-    (text       : string)
+    (bot             : ITelegramBotClient)
+    (tgCfg           : TelegramConfig)
+    (chatId          : int64)
+    (stateRef        : StreamState ref)
+    (thinkingRef     : ThinkingStreamState ref)
+    (replyToRef      : int option ref)
+    (delta           : StreamDelta)
     : Async<unit> =
     async {
-        match !stateRef with
-        | NotStarted | Completed ->
-            try
-                let replyParams : ReplyParameters =
-                    match !replyToRef with
-                    | Some rid when tgCfg.ReplyToMessage -> ReplyParameters(MessageId = rid)
-                    | _                                  -> Unchecked.defaultof<ReplyParameters>
-                let! msg =
-                    bot.SendMessage(TgChatId(chatId), text + "▌", replyParameters = replyParams)
-                    |> Async.AwaitTask
-                stateRef := Streaming (msg.MessageId, text, DateTimeOffset.UtcNow)
-            with ex ->
-                eprintfn "[Telegram] SendMessage (streaming) error: %s" ex.Message
-
-        | Streaming (msgId, accumulated, lastEdit) ->
-            let newAccumulated = accumulated + text
-            let now     = DateTimeOffset.UtcNow
-            let elapsed = now - lastEdit
-            if elapsed >= tgCfg.StreamEditInterval then
-                stateRef := Streaming (msgId, newAccumulated, now)
+        match delta with
+        | ThinkingDelta t ->
+            // Scheme B: thinking as a separate message with 💭 prefix + italic
+            match !thinkingRef with
+            | ThinkingIdle ->
                 try
-                    do! bot.EditMessageText(TgChatId(chatId), msgId, newAccumulated + "▌")
+                    let replyParams : ReplyParameters =
+                        match !replyToRef with
+                        | Some rid when tgCfg.ReplyToMessage -> ReplyParameters(MessageId = rid)
+                        | _ -> Unchecked.defaultof<ReplyParameters>
+                    let display = "💭 _" + t + "_▌"
+                    let! msg =
+                        bot.SendMessage(TgChatId(chatId), display, parseMode = ParseMode.Markdown, replyParameters = replyParams)
+                        |> Async.AwaitTask
+                    thinkingRef := ThinkingSent (msg.MessageId, t, DateTimeOffset.UtcNow)
+                with ex ->
+                    eprintfn "[Telegram] SendMessage (thinking) error: %s" ex.Message
+            | ThinkingSent (msgId, accumulated, lastEdit) ->
+                let newAcc = accumulated + t
+                let now = DateTimeOffset.UtcNow
+                if now - lastEdit >= tgCfg.StreamEditInterval then
+                    thinkingRef := ThinkingSent (msgId, newAcc, now)
+                    try
+                        // Truncate display to prevent Telegram 4096-char message limit
+                        let display =
+                            if newAcc.Length > 3800 then "💭 _..." + newAcc.[newAcc.Length - 3700..] + "_▌"
+                            else "💭 _" + newAcc + "_▌"
+                        do! bot.EditMessageText(TgChatId(chatId), msgId, display, parseMode = ParseMode.Markdown)
+                            |> Async.AwaitTask |> Async.Ignore
+                    with _ -> ()
+                else
+                    thinkingRef := ThinkingSent (msgId, newAcc, lastEdit)
+
+        | TextDelta text ->
+            // Finalize thinking message if one is active
+            match !thinkingRef with
+            | ThinkingSent (msgId, accumulated, _) ->
+                thinkingRef := ThinkingIdle
+                try
+                    let display =
+                        if accumulated.Length > 3800 then "💭 _..." + accumulated.[accumulated.Length - 3700..] + "_"
+                        else "💭 _" + accumulated + "_"
+                    do! bot.EditMessageText(TgChatId(chatId), msgId, display, parseMode = ParseMode.Markdown)
                         |> Async.AwaitTask |> Async.Ignore
                 with _ -> ()
-            else
-                stateRef := Streaming (msgId, newAccumulated, lastEdit)
+            | ThinkingIdle -> ()
+
+            // Normal text streaming (existing logic)
+            match !stateRef with
+            | NotStarted | Completed ->
+                try
+                    let replyParams : ReplyParameters =
+                        match !replyToRef with
+                        | Some rid when tgCfg.ReplyToMessage -> ReplyParameters(MessageId = rid)
+                        | _ -> Unchecked.defaultof<ReplyParameters>
+                    let! msg =
+                        bot.SendMessage(TgChatId(chatId), text + "▌", replyParameters = replyParams)
+                        |> Async.AwaitTask
+                    stateRef := Streaming (msg.MessageId, text, DateTimeOffset.UtcNow)
+                with ex ->
+                    eprintfn "[Telegram] SendMessage (streaming) error: %s" ex.Message
+            | Streaming (msgId, accumulated, lastEdit) ->
+                let newAccumulated = accumulated + text
+                let now = DateTimeOffset.UtcNow
+                if now - lastEdit >= tgCfg.StreamEditInterval then
+                    stateRef := Streaming (msgId, newAccumulated, now)
+                    try
+                        // Show tail preview during streaming to keep edit payloads constant-size.
+                        // Full text is sent in onStreamEnd. Prevents progressive slowdown on long messages.
+                        let preview =
+                            if newAccumulated.Length > 500 then "..." + newAccumulated.[newAccumulated.Length - 480..]
+                            else newAccumulated
+                        do! bot.EditMessageText(TgChatId(chatId), msgId, preview + "▌")
+                            |> Async.AwaitTask |> Async.Ignore
+                    with _ -> ()
+                else
+                    stateRef := Streaming (msgId, newAccumulated, lastEdit)
+
+        | ToolArgDelta _ -> ()
     }
 
 let private onStreamEnd
@@ -169,21 +230,51 @@ let private onStreamEnd
         match !stateRef with
         | NotStarted | Completed -> ()
         | Streaming (msgId, accumulated, _) ->
-            let finalHtml = markdownToHtml accumulated
-            let! success =
-                async {
-                    try
-                        do! bot.EditMessageText(TgChatId(chatId), msgId, finalHtml,
-                                parseMode = ParseMode.Html)
-                            |> Async.AwaitTask |> Async.Ignore
-                        return true
-                    with _ -> return false
-                }
-            if not success then
-                try
-                    do! bot.EditMessageText(TgChatId(chatId), msgId, accumulated)
-                        |> Async.AwaitTask |> Async.Ignore
+            // Telegram has a 4096 character message limit.
+            // For long messages: delete the streaming preview and send the full text as new message(s).
+            if accumulated.Length > 3500 then
+                // Delete the streaming preview message (with ▌ cursor)
+                try do! bot.DeleteMessage(TgChatId(chatId), msgId) |> Async.AwaitTask |> Async.Ignore
                 with _ -> ()
+                // Send full text in chunks of ~4000 chars
+                let chunks =
+                    let mutable remaining = accumulated
+                    [ while remaining.Length > 0 do
+                        let len = min 3900 remaining.Length
+                        // Try to break at a newline to avoid splitting mid-paragraph
+                        let breakAt =
+                            if len >= remaining.Length then len
+                            else
+                                match remaining.LastIndexOf('\n', len - 1, min len 500) with
+                                | -1 -> len
+                                | i  -> i + 1
+                        yield remaining.[..breakAt - 1]
+                        remaining <- remaining.[breakAt..] ]
+                for chunk in chunks do
+                    let html = markdownToHtml chunk
+                    try
+                        do! bot.SendMessage(TgChatId(chatId), html, parseMode = ParseMode.Html)
+                            |> Async.AwaitTask |> Async.Ignore
+                    with _ ->
+                        try do! bot.SendMessage(TgChatId(chatId), chunk)
+                                |> Async.AwaitTask |> Async.Ignore
+                        with _ -> ()
+            else
+                // Short message: edit in-place (replace preview with final content)
+                let finalHtml = markdownToHtml accumulated
+                let! success =
+                    async {
+                        try
+                            do! bot.EditMessageText(TgChatId(chatId), msgId, finalHtml,
+                                    parseMode = ParseMode.Html)
+                                |> Async.AwaitTask |> Async.Ignore
+                            return true
+                        with _ -> return false
+                    }
+                if not success then
+                    try do! bot.EditMessageText(TgChatId(chatId), msgId, accumulated)
+                            |> Async.AwaitTask |> Async.Ignore
+                    with _ -> ()
 
             match tgCfg.ReactEmoji with
             | Some emoji ->
@@ -358,12 +449,28 @@ let sendOutboundMessage
         | false, _ ->
             eprintfn "[Telegram] Cannot parse chat ID '%s' as int64, skipping send" chatStr
         | true, chatId ->
-            // Send text content
+            // Send text content (with optional InlineKeyboard for ask_user buttons)
             if not (String.IsNullOrWhiteSpace msg.Content) then
                 let html = markdownToHtml msg.Content
+                let replyMarkup =
+                    if msg.Buttons.IsEmpty then None
+                    else
+                        let rows : seq<seq<Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton>> =
+                            msg.Buttons
+                            |> List.map (fun row ->
+                                row |> List.map (fun label ->
+                                    Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton.WithCallbackData(label, "ask:" + label))
+                                |> Seq.ofList)
+                            |> Seq.ofList
+                        Some (Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(rows))
                 try
-                    do! bot.SendMessage(TgChatId(chatId), html, parseMode = ParseMode.Html)
-                        |> Async.AwaitTask |> Async.Ignore
+                    match replyMarkup with
+                    | Some kb ->
+                        do! bot.SendMessage(TgChatId(chatId), html, parseMode = ParseMode.Html, replyMarkup = kb)
+                            |> Async.AwaitTask |> Async.Ignore
+                    | None ->
+                        do! bot.SendMessage(TgChatId(chatId), html, parseMode = ParseMode.Html)
+                            |> Async.AwaitTask |> Async.Ignore
                 with _ ->
                     try
                         do! bot.SendMessage(TgChatId(chatId), msg.Content)
@@ -384,17 +491,20 @@ let sendOutboundMessage
 // ═══════════════════════════════════════════════════════════════════════════
 
 type TelegramCoordinator(baseDeps: AgentDependencies, bot: ITelegramBotClient, tgCfg: TelegramConfig) =
-    let actors       = ConcurrentDictionary<SessionId, MailboxProcessor<SessionActorMsg>>()
-    let streamStates = ConcurrentDictionary<int64, StreamState ref>()
-    let replyToRefs  = ConcurrentDictionary<int64, int option ref>()
+    let actors          = ConcurrentDictionary<SessionId, MailboxProcessor<SessionActorMsg>>()
+    let streamStates    = ConcurrentDictionary<int64, StreamState ref>()
+    let thinkingStates  = ConcurrentDictionary<int64, ThinkingStreamState ref>()
+    let replyToRefs     = ConcurrentDictionary<int64, int option ref>()
+    let pendingQueries  = ConcurrentDictionary<SessionId, PendingUserQuery>()
 
     let makeStreamHook (chatId: int64) : AgentStreamHook =
         if not tgCfg.Streaming then NoStreaming
         else
-            let stateRef   = streamStates.GetOrAdd(chatId,  fun _ -> ref NotStarted)
-            let replyToRef = replyToRefs.GetOrAdd(chatId, fun _ -> ref None)
+            let stateRef    = streamStates.GetOrAdd(chatId,   fun _ -> ref NotStarted)
+            let thinkingRef = thinkingStates.GetOrAdd(chatId, fun _ -> ref ThinkingIdle)
+            let replyToRef  = replyToRefs.GetOrAdd(chatId, fun _ -> ref None)
             StreamingHook(
-                onDelta     = (fun text     -> onStreamDelta bot tgCfg chatId stateRef replyToRef text),
+                onDelta     = (fun delta    -> onStreamDelta bot tgCfg chatId stateRef thinkingRef replyToRef delta),
                 onStreamEnd = (fun hasTools -> onStreamEnd   bot tgCfg chatId stateRef hasTools))
 
     member private _.GetOrCreate(sid: SessionId, chatId: int64) =
@@ -407,23 +517,44 @@ type TelegramCoordinator(baseDeps: AgentDependencies, bot: ITelegramBotClient, t
         let r = replyToRefs.GetOrAdd(chatId, fun _ -> ref None)
         r := replyTo
 
+    /// Register a pending ask_user query for a Telegram session.
+    member _.RegisterPending(sid: SessionId, query: PendingUserQuery) =
+        pendingQueries[sid] <- query
+
+    /// Remove a pending query (e.g. on timeout).
+    member _.RemovePending(sid: SessionId) =
+        pendingQueries.TryRemove(sid) |> ignore
+
+    /// Try to resolve a pending ask_user query with the user's response.
+    member _.TryResolvePending(sid: SessionId, response: string) : bool =
+        match pendingQueries.TryRemove(sid) with
+        | true, query -> query.Tcs.TrySetResult(response) |> ignore; true
+        | false, _ -> false
+
     /// Route one inbound domain message to its session actor.
+    /// Pre-check: resolve pending ask_user query before routing to actor.
     member this.Route(inbound: InboundMessage, chatId: int64) : Async<Result<AgentResult, AgentError>> =
         async {
-            let sid   = sessionIdForTelegram chatId
-            let actor = this.GetOrCreate(sid, chatId)
-            // Reset stream state so we can distinguish "never streamed" from "completed".
-            let stateRef = streamStates.GetOrAdd(chatId, fun _ -> ref NotStarted)
-            stateRef.Value <- NotStarted
-            let! result = actor.PostAndAsyncReply(fun ch -> ProcessInput(inbound, ch))
-            match result with
-            | Result.Ok (text, _) ->
-                let agentResult =
-                    match stateRef.Value with
-                    | Completed -> StreamedResponse text   // streaming happened, text already sent
-                    | _         -> PlainResponse text      // no streaming (rule engine stop, etc.)
-                return Result.Ok agentResult
-            | Result.Error e -> return Result.Error e
+            let sid = sessionIdForTelegram chatId
+            // Intercept: resolve pending ask_user query
+            match inbound.Input with
+            | ChatMessage (text, _) when this.TryResolvePending(sid, text) ->
+                return Result.Ok (PlainResponse "")
+            | _ ->
+                let actor = this.GetOrCreate(sid, chatId)
+                let stateRef = streamStates.GetOrAdd(chatId, fun _ -> ref NotStarted)
+                stateRef.Value <- NotStarted
+                let thinkingRef = thinkingStates.GetOrAdd(chatId, fun _ -> ref ThinkingIdle)
+                thinkingRef.Value <- ThinkingIdle
+                let! result = actor.PostAndAsyncReply(fun ch -> ProcessInput(inbound, ch))
+                match result with
+                | Result.Ok (text, _) ->
+                    let agentResult =
+                        match stateRef.Value with
+                        | Completed -> StreamedResponse text
+                        | _         -> PlainResponse text
+                    return Result.Ok agentResult
+                | Result.Error e -> return Result.Error e
         }
 
     /// Expose the base config so that processMessage can render /status output.
@@ -685,6 +816,9 @@ let private processMessage
         | Command NewSession
         | Command ClearHistory
         | Command (ShowHistory _)
+        | Command (ShowJobs _)
+        | Command (TaskCmd _)
+        | Command (ShowEvents _)
         | Command (ListSessions _)
         | Command (SearchSessions _)
         | Command RebuildIndex
@@ -958,6 +1092,20 @@ let private pollLoop
                                     | Error msg ->
                                         do! bot.SendMessage(TgChatId(chatId), $"❌ {msg}")
                                             |> Async.AwaitTask |> Async.Ignore
+
+                            // ask_user callback: resolve pending query with the selected option
+                            elif data.StartsWith("ask:") && chatId <> 0L then
+                                let optionLabel = data.Substring(4)
+                                let sid = SessionId (sprintf "telegram:%d" chatId)
+                                if coordinator.TryResolvePending(sid, optionLabel) then
+                                    match cbq.Message with
+                                    | null -> ()
+                                    | origMsg ->
+                                        try
+                                            do! bot.EditMessageText(TgChatId(chatId), origMsg.MessageId,
+                                                    sprintf "%s\n\nSelected: %s" origMsg.Text optionLabel)
+                                                |> Async.AwaitTask |> Async.Ignore
+                                        with _ -> ()
                         with ex ->
                             eprintfn "[Telegram] CallbackQuery error: %s" ex.Message
                     }, ct)

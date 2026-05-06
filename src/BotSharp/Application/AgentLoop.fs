@@ -31,7 +31,13 @@ type AgentDependencies = {
     FallbackProviders : LLMProvider list           // ordered fallback providers when primary fails
     OpenStateDb       : (unit -> Microsoft.Data.Sqlite.SqliteConnection) option  // SQLite connection factory; None = disabled
     TokenTracker      : TokenTracker option ref   // None = ContextWindowTokens=0, no tracking
+    EventBus          : BotSharp.Infrastructure.EventBus.EventBus.EventBus option  // unified event bus; None = disabled
 }
+
+/// Publish an event to the EventBus (no-op if bus is None).
+let private emit (deps: AgentDependencies) (category: string) (kind: string) (sessionId: string option) (data: (string * string) list) =
+    deps.EventBus |> Option.iter (fun bus ->
+        bus.Publish (BotSharp.Infrastructure.EventBus.EventBus.mkEvent category kind sessionId data))
 
 let private liftStorage (m: Async<Result<'a, StorageError>>) : AsyncResult<'a, AgentError> =
     async {
@@ -231,6 +237,7 @@ let private executeTool
     (deps      : AgentDependencies)
     (counts    : Dictionary<string, int>)
     (sessionId : SessionId)
+    (hookCtx   : AgentHookContext)
     (call      : ToolCall)
     : Async<ToolCall * ToolResult> =
     async {
@@ -238,11 +245,29 @@ let private executeTool
         match checkRepeatedExternalLookup counts call with
         | Some blocked -> return (call, blocked)
         | None ->
+
+        // BeforeToolCall hook — can block the tool (exit code != 0 → Error)
+        let! hookResult =
+            try deps.Hook.BeforeToolCall hookCtx call
+            with _ -> async { return Result.Ok () }
+        match hookResult with
+        | Result.Error msg ->
+            let (ToolName toolName) = call.Tool
+            eprintfn "[Hook] BeforeToolCall blocked %s: %s" toolName msg
+            return (call, ToolFailure (ExecutionFailed (sprintf "Blocked by hook: %s" msg)))
+        | Result.Ok () ->
+
         match deps.Tools.TryFind call.Tool with
         | None ->
             return (call, ToolFailure (ToolNotFound call.Tool))
         | Some (_, execute) ->
+            let (ToolName tn) = call.Tool
+            emit deps "tool" "tool.exec.start" None [ "tool_name", tn ]
+            let sw = System.Diagnostics.Stopwatch.StartNew()
             let! result = execute call.Arguments
+            sw.Stop()
+            let status = match result with ToolSuccess _ -> "success" | ToolFailure _ -> "failure"
+            emit deps "tool" "tool.exec.end" None [ "tool_name", tn; "status", status; "duration_ms", string sw.ElapsedMilliseconds ]
             // Persist oversized results to disk; replace with a short reference + preview.
             // Mirrors Python maybe_persist_tool_result (nanobot.utils.helpers).
             // This runs BEFORE truncation so the full content is written to disk.
@@ -266,7 +291,11 @@ let private executeTool
                 | other -> other
             // Ensure non-empty content (Anthropic and some providers reject empty results).
             let safe = ensureNonEmptyResult call.Tool capped
-            return (call, safe)
+            // AfterToolCall hook — can transform the result
+            let! hooked =
+                try deps.Hook.AfterToolCall hookCtx call safe
+                with _ -> async { return safe }
+            return (call, hooked)
     }
 
 /// Partition tool calls into execution batches, matching Python's _partition_tool_batches.
@@ -295,14 +324,14 @@ let private executeAllTools
     (deps      : AgentDependencies)
     (counts    : Dictionary<string, int>)
     (sessionId : SessionId)
+    (hookCtx   : AgentHookContext)
     (calls     : ToolCall list)
     : Async<(ToolCall * ToolResult) list> =
     async {
         let batches = partitionToolBatches deps calls
         let results = System.Collections.Generic.List<ToolCall * ToolResult>()
         for batch in batches do
-            // Concurrent-safe batches run in parallel; single-item batches run alone.
-            let! batchResults = batch |> List.map (executeTool deps counts sessionId) |> Async.Parallel
+            let! batchResults = batch |> List.map (executeTool deps counts sessionId hookCtx) |> Async.Parallel
             results.AddRange(batchResults)
         return List.ofSeq results
     }
@@ -881,6 +910,9 @@ let rec private iterate
             // Create per-iteration hook context and fire BeforeIteration.
             let hookCtx = AgentHook.mkContext iterIdx req.Messages
             do! deps.Hook.BeforeIteration hookCtx |> AsyncResult.ofAsync
+            let sidStr = let (SessionId s) = SessionSnapshot.id snap in s
+            emit deps "llm" "llm.call.start" (Some sidStr)
+                [ "model", deps.Config.DefaultModel; "iteration", string iterIdx; "message_count", string req.Messages.Length ]
 
             let! response =
                 match deps.StreamHook with
@@ -902,11 +934,11 @@ let rec private iterate
                                 match evt with
                                 | ContentDelta (TextDelta t) ->
                                     textAcc <- textAcc + t
-                                    do! onDelta t
-                                    // Notify the hook of each streaming delta.
+                                    do! onDelta (TextDelta t)
                                     do! deps.Hook.OnStream hookCtx t
                                 | ContentDelta (ThinkingDelta t) ->
                                     thinkingAcc <- thinkingAcc + t
+                                    do! onDelta (ThinkingDelta t)
                                 | ContentDelta (ToolArgDelta (idx, chunk)) ->
                                     match toolBuffers.TryGetValue(idx) with
                                     | true, (id, name, buf) ->
@@ -1122,7 +1154,48 @@ let rec private iterate
             let hookCtx = AgentHook.mkContext iterIdx (SessionSnapshot.messages snap)
             hookCtx.ToolCalls <- NonEmptyList.toList nel
             do! deps.Hook.BeforeExecuteTools hookCtx |> AsyncResult.ofAsync
-            let! results = executeAllTools deps externalLookupCounts (SessionSnapshot.id snap) (NonEmptyList.toList nel) |> AsyncResult.ofAsync
+
+            // CLIPS pre-execution: inspect tool calls and inject missing arguments.
+            // Tool calls flow through CLIPS before execution so rules can patch
+            // known LLM argument omissions (e.g. MiMo omitting 'action' on 'my' tool).
+            let nel =
+                match deps.RuleEngine with
+                | None -> nel
+                | Some engine ->
+                    let calls = NonEmptyList.toList nel
+                    // Assert pre-execution facts for each tool call
+                    for call in calls do
+                        let (ToolName toolName) = call.Tool
+                        let hasAction = call.Arguments.ContainsKey "action"
+                        BotSharp.Infrastructure.Rules.RuleEngine.assertToolCallPre
+                            engine toolName hasAction deps.Config.DefaultModel
+                    // Evaluate rules and collect argument injections
+                    let injections = BotSharp.Infrastructure.Rules.RuleEngine.getToolArgInjections engine
+                    BotSharp.Infrastructure.Rules.RuleEngine.resetTurn engine
+                    if injections.IsEmpty then nel
+                    else
+                        // Apply injections: patch tool call arguments
+                        let patchCall (call: ToolCall) =
+                            let (ToolName toolName) = call.Tool
+                            let patches =
+                                injections
+                                |> List.filter (fun (t, _, _) -> t = toolName)
+                            if patches.IsEmpty then call
+                            else
+                                let newArgs =
+                                    patches |> List.fold (fun (args: Map<string, System.Text.Json.JsonElement>) (_, param, value) ->
+                                        if args.ContainsKey param then args
+                                        else
+                                            // Create a JsonElement for the injected value
+                                            use doc = System.Text.Json.JsonDocument.Parse($"\"{value}\"")
+                                            let el = doc.RootElement.Clone()
+                                            eprintfn "[RuleEngine] Injecting default %s=%s for tool '%s'" param value toolName
+                                            args |> Map.add param el
+                                    ) call.Arguments
+                                { call with Arguments = newArgs }
+                        NonEmptyList.map patchCall nel
+
+            let! results = executeAllTools deps externalLookupCounts (SessionSnapshot.id snap) hookCtx (NonEmptyList.toList nel) |> AsyncResult.ofAsync
             hookCtx.ToolResults <- results
             // fail_on_tool_error: when enabled, any ToolFailure immediately aborts the loop.
             // Mirrors Python's spec.fail_on_tool_error which raises an exception on first error.
@@ -1198,12 +1271,55 @@ let rec private iterate
             return! iterate deps snap' nextState iterIdx 0 0 externalLookupCounts
 
         | Finalizing (text, rcOpt) ->
-            // Apply the FinalizeContent pipeline — a hook may transform or suppress the reply.
             let hookCtx = AgentHook.mkContext iterIdx (SessionSnapshot.messages snap)
             hookCtx.FinalContent <- Some text
+
+            // PreSendMessage hook — can suppress the reply (returns None)
+            let! preSendResult =
+                (try deps.Hook.PreSendMessage hookCtx text
+                 with _ -> async { return Some text })
+                |> AsyncResult.ofAsync
+
+            match preSendResult with
+            | None ->
+                // Message suppressed by hook
+                do! deps.Hook.OnTurnComplete hookCtx |> AsyncResult.ofAsync
+                let snap2 = SessionSnapshot.append (AssistantMessage ("", rcOpt)) snap
+                return ("", snap2)
+            | Some text ->
+
+            // FinalizeContent pipeline (sync transform/suppress)
             let finalText = deps.Hook.FinalizeContent hookCtx (Some text) |> Option.defaultValue text
-            let snap2 = SessionSnapshot.append (AssistantMessage (finalText, rcOpt)) snap
-            return (finalText, snap2)
+
+            // Citation parsing: extract <mem-citation> block for usage tracking.
+            let (displayText, _citationOpt) =
+                if deps.Config.MemoryCitationTracking then
+                    let (visible, citation) = BotSharp.Infrastructure.Memory.CitationParser.stripCitation finalText
+                    match citation with
+                    | Some c ->
+                        match deps.OpenStateDb with
+                        | Some factory ->
+                            try
+                                use conn = factory ()
+                                for entry in c.Entries do
+                                    let memKey = sprintf "citation:%s" entry.Path
+                                    BotSharp.Infrastructure.Storage.StateDb.recordMemoryUsage conn memKey |> Async.RunSynchronously
+                            with _ -> ()
+                        | None -> ()
+                        if deps.Config.MemoryCitationStrip then (visible, Some c)
+                        else (finalText, Some c)
+                    | None -> (finalText, None)
+                else (finalText, None)
+
+            // OnTurnComplete hook — cleanup/verification
+            do! deps.Hook.OnTurnComplete hookCtx |> AsyncResult.ofAsync
+
+            let sidStr = let (SessionId s) = SessionSnapshot.id snap in s
+            emit deps "session" "session.message.out" (Some sidStr)
+                [ "content_length", string displayText.Length; "iteration", string iterIdx ]
+
+            let snap2 = SessionSnapshot.append (AssistantMessage (displayText, rcOpt)) snap
+            return (displayText, snap2)
 
         | Idle | BuildingPrompt _ | Consolidating _ ->
             return! AsyncResult.ofResult (Error SessionActorStopped)
