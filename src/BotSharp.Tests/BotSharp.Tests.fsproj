@@ -64,6 +64,7 @@
     <Compile Include="Infrastructure/ShellToolTests.fs" />
     <Compile Include="Infrastructure/SpawnToolTests.fs" />
     <Compile Include="Infrastructure/MyToolTests.fs" />
+    <Compile Include="Infrastructure/EventBusTests.fs" />
     <Compile Include="Infrastructure/StringUtilsTests.fs" />
   </ItemGroup>
 
