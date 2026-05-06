@@ -26,6 +26,7 @@
     <Compile Include="Application/SessionActorTests.fs" />
     <Compile Include="Application/ContextBuilderTests.fs" />
     <Compile Include="Application/AutoCompactServiceTests.fs" />
+    <Compile Include="Application/Phase1ExtractorTests.fs" />
     <Compile Include="Application/HeartbeatServiceTests.fs" />
     <Compile Include="Channels/MarkdownParserTests.fs" />
     <Compile Include="Channels/ApiChannelTests.fs" />
@@ -46,6 +47,7 @@
     <Compile Include="Infrastructure/TaskToolTests.fs" />
     <Compile Include="Infrastructure/AskUserToolTests.fs" />
     <Compile Include="Infrastructure/LongTaskToolTests.fs" />
+    <Compile Include="Infrastructure/RlmToolTests.fs" />
     <Compile Include="Infrastructure/JobQueueTests.fs" />
     <Compile Include="Infrastructure/CronServiceTests.fs" />
     <Compile Include="Infrastructure/CronToolTests.fs" />
