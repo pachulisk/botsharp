@@ -20,6 +20,7 @@
     <Compile Include="Parsers/ConfigLoaderTests.fs" />
     <Compile Include="Providers/ProviderRegistryTests.fs" />
     <Compile Include="Providers/OpenAICompatTests.fs" />
+    <Compile Include="Providers/TranscriptionProviderTests.fs" />
     <Compile Include="Application/AgentLoopTests.fs" />
     <Compile Include="Application/MemoryConsolidatorTests.fs" />
     <Compile Include="Application/SubagentManagerTests.fs" />
