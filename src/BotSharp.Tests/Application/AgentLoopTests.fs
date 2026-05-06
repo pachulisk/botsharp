@@ -2668,3 +2668,97 @@ let ``chatWithRetry honors RateLimited Retry-After hint`` () =
     match result with
     | Result.Ok _ -> ()
     | other -> Assert.Fail($"Expected Ok after RateLimited with Retry-After=0, got {other}")
+
+// ── Secret redaction in tool results ─────────────────────────────────────
+
+[<Fact>]
+let ``runAgentLoop redacts OpenAI API key pattern in tool result`` () =
+    // Validates that when a tool returns content containing a secret pattern,
+    // the persisted ToolResultMessage has [REDACTED] instead.
+    let fakeApiKey = "sk-" + String.replicate 21 "a"  // 24-char key matching the OpenAI pattern
+    let toolCall = {
+        Id           = ToolCallId "call_redact"
+        Tool         = ToolName "secret_leaker"
+        Arguments    = Map.empty
+        ProviderMeta = None
+    }
+    let responses = [ toolCallResponse [toolCall]; textResponse "ok" ]
+    let leakyTools =
+        Map.ofList [
+            ToolName "secret_leaker",
+            ( { Name = ToolName "secret_leaker"; Description = "leaks a secret"; Parameters = Map.empty; ConcurrencySafe = false },
+              fun _ -> async { return ToolSuccess $"Here is your key: {fakeApiKey}" })
+        ]
+    let deps = makeDepsWithTools (stubProviderSeq responses) leakyTools
+    match runAgentLoop dummyInbound deps None |> Async.RunSynchronously with
+    | Result.Ok (_, snap) ->
+        let msgs = SessionSnapshot.messages snap
+        let toolResultContent =
+            msgs |> List.choose (function
+                | ToolResultMessage (_, _, content) -> Some content
+                | _ -> None)
+            |> List.tryHead
+        match toolResultContent with
+        | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
+        | Some content ->
+            Assert.DoesNotContain(fakeApiKey, content)
+            Assert.Contains("[REDACTED]", content)
+    | other -> Assert.Fail($"Expected Ok result, got {other}")
+
+[<Fact>]
+let ``runAgentLoop redacts GitHub PAT pattern in tool result`` () =
+    let fakePat = "ghp_" + String.replicate 36 "b"  // 40-char GitHub PAT
+    let toolCall = {
+        Id           = ToolCallId "call_ghpat"
+        Tool         = ToolName "gh_leaker"
+        Arguments    = Map.empty
+        ProviderMeta = None
+    }
+    let responses = [ toolCallResponse [toolCall]; textResponse "done" ]
+    let leakyTools =
+        Map.ofList [
+            ToolName "gh_leaker",
+            ( { Name = ToolName "gh_leaker"; Description = "leaks a GitHub PAT"; Parameters = Map.empty; ConcurrencySafe = false },
+              fun _ -> async { return ToolSuccess $"token={fakePat}" })
+        ]
+    let deps = makeDepsWithTools (stubProviderSeq responses) leakyTools
+    match runAgentLoop dummyInbound deps None |> Async.RunSynchronously with
+    | Result.Ok (_, snap) ->
+        let toolResultContent =
+            SessionSnapshot.messages snap
+            |> List.choose (function ToolResultMessage (_, _, c) -> Some c | _ -> None)
+            |> List.tryHead
+        match toolResultContent with
+        | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
+        | Some content ->
+            Assert.DoesNotContain(fakePat, content)
+            Assert.Contains("[REDACTED]", content)
+    | other -> Assert.Fail($"Expected Ok result, got {other}")
+
+[<Fact>]
+let ``runAgentLoop does not alter tool result when no secret pattern present`` () =
+    let safeContent = "This is just a normal tool output with no secrets."
+    let toolCall = {
+        Id           = ToolCallId "call_safe"
+        Tool         = ToolName "safe_tool"
+        Arguments    = Map.empty
+        ProviderMeta = None
+    }
+    let responses = [ toolCallResponse [toolCall]; textResponse "ok" ]
+    let safeTools =
+        Map.ofList [
+            ToolName "safe_tool",
+            ( { Name = ToolName "safe_tool"; Description = "safe output"; Parameters = Map.empty; ConcurrencySafe = false },
+              fun _ -> async { return ToolSuccess safeContent })
+        ]
+    let deps = makeDepsWithTools (stubProviderSeq responses) safeTools
+    match runAgentLoop dummyInbound deps None |> Async.RunSynchronously with
+    | Result.Ok (_, snap) ->
+        let toolResultContent =
+            SessionSnapshot.messages snap
+            |> List.choose (function ToolResultMessage (_, _, c) -> Some c | _ -> None)
+            |> List.tryHead
+        match toolResultContent with
+        | None -> Assert.Fail("Expected a ToolResultMessage in snapshot")
+        | Some content -> Assert.Equal(safeContent, content)
+    | other -> Assert.Fail($"Expected Ok result, got {other}")
