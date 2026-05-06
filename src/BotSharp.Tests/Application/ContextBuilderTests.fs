@@ -577,6 +577,40 @@ let ``buildSystemPrompt discord channel injects messaging-app Format Hint`` () =
             Assert.Contains("Format Hint", prompt)
             Assert.Contains("messaging app", prompt))
 
+[<Fact>]
+let ``buildSystemPrompt qq channel injects messaging-app Format Hint`` () =
+    // qq is grouped with telegram/discord — short paragraphs, no tables
+    withSystemPromptChannel (Some "qq")
+        (fun _ -> ())
+        (fun prompt ->
+            Assert.Contains("Format Hint", prompt)
+            Assert.Contains("messaging app", prompt))
+
+[<Fact>]
+let ``buildSystemPrompt sms channel injects plain-text Format Hint`` () =
+    // sms is grouped with whatsapp — plain text only
+    withSystemPromptChannel (Some "sms")
+        (fun _ -> ())
+        (fun prompt ->
+            Assert.Contains("Format Hint", prompt)
+            Assert.Contains("plain text only", prompt))
+
+[<Fact>]
+let ``buildSystemPrompt email channel injects email Format Hint`` () =
+    withSystemPromptChannel (Some "email")
+        (fun _ -> ())
+        (fun prompt ->
+            Assert.Contains("Format Hint", prompt)
+            Assert.Contains("email", prompt))
+
+[<Fact>]
+let ``buildSystemPrompt cli channel produces no Format Hint`` () =
+    // "cli" is not in any matched branch → None returned
+    withSystemPromptChannel (Some "cli")
+        (fun _ -> ())
+        (fun prompt ->
+            Assert.DoesNotContain("Format Hint", prompt))
+
 // ═══════════════════════════════════════════════════════════════════════════
 // buildSystemPrompt — always-active vs on-demand skills placement
 // ═══════════════════════════════════════════════════════════════════════════
