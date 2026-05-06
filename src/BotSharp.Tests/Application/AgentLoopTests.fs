@@ -363,6 +363,67 @@ let ``externalLookupSignature returns web_search key for web_search tool`` () =
     | None -> Assert.Fail("Expected Some key for web_search")
 
 [<Fact>]
+let ``externalLookupSignature accepts search_term as alternative key for web_search`` () =
+    // web_search falls back to "search_term" if "query" is absent
+    let args =
+        use doc = JsonDocument.Parse("""{"search_term":"F# testing"}""")
+        doc.RootElement.EnumerateObject()
+        |> Seq.map (fun p -> p.Name, p.Value.Clone())
+        |> Map.ofSeq
+    let call = { Id = ToolCallId "c1"; Tool = ToolName "web_search"; Arguments = args; ProviderMeta = None }
+    match externalLookupSignature call with
+    | Some key ->
+        Assert.StartsWith("web_search:", key)
+        Assert.Contains("f# testing", key)  // lowercased
+    | None -> Assert.Fail("Expected Some key using search_term fallback")
+
+[<Fact>]
+let ``externalLookupSignature normalises URL to lowercase`` () =
+    // URLs are lowercased so HTTP://EXAMPLE.COM and http://example.com match
+    let args =
+        use doc = JsonDocument.Parse("""{"url":"HTTP://EXAMPLE.COM/Page"}""")
+        doc.RootElement.EnumerateObject()
+        |> Seq.map (fun p -> p.Name, p.Value.Clone())
+        |> Map.ofSeq
+    let call = { Id = ToolCallId "c1"; Tool = ToolName "web_fetch"; Arguments = args; ProviderMeta = None }
+    match externalLookupSignature call with
+    | Some key -> Assert.Equal("web_fetch:http://example.com/page", key)
+    | None -> Assert.Fail("Expected Some key for web_fetch with uppercase URL")
+
+[<Fact>]
+let ``externalLookupSignature returns None for web_fetch with missing url argument`` () =
+    // No "url" argument → getStr "url" = None → no key
+    let call = { Id = ToolCallId "c1"; Tool = ToolName "web_fetch"; Arguments = Map.empty; ProviderMeta = None }
+    Assert.Equal(None, externalLookupSignature call)
+
+[<Fact>]
+let ``externalLookupSignature returns None for web_fetch with empty url argument`` () =
+    // url = "" (empty string) → getStr returns None
+    let args =
+        use doc = JsonDocument.Parse("""{"url":""}""")
+        doc.RootElement.EnumerateObject()
+        |> Seq.map (fun p -> p.Name, p.Value.Clone())
+        |> Map.ofSeq
+    let call = { Id = ToolCallId "c1"; Tool = ToolName "web_fetch"; Arguments = args; ProviderMeta = None }
+    Assert.Equal(None, externalLookupSignature call)
+
+[<Fact>]
+let ``externalLookupSignature returns None for web_search with no query or search_term`` () =
+    let call = { Id = ToolCallId "c1"; Tool = ToolName "web_search"; Arguments = Map.empty; ProviderMeta = None }
+    Assert.Equal(None, externalLookupSignature call)
+
+[<Fact>]
+let ``externalLookupSignature returns None for web_fetch when url is non-string JSON`` () =
+    // url is a number (JsonValueKind.Number), not a string → getStr returns None
+    let args =
+        use doc = JsonDocument.Parse("""{"url":42}""")
+        doc.RootElement.EnumerateObject()
+        |> Seq.map (fun p -> p.Name, p.Value.Clone())
+        |> Map.ofSeq
+    let call = { Id = ToolCallId "c1"; Tool = ToolName "web_fetch"; Arguments = args; ProviderMeta = None }
+    Assert.Equal(None, externalLookupSignature call)
+
+[<Fact>]
 let ``runAgentLoop blocks web_fetch after 2 identical calls`` () =
     // Scenario: LLM calls web_fetch with the same URL 3 times (in 3 tool rounds).
     // 1st and 2nd calls succeed; 3rd is blocked by the throttle.
