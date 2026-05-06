@@ -27,6 +27,7 @@
     <Compile Include="Application/ContextBuilderTests.fs" />
     <Compile Include="Application/AutoCompactServiceTests.fs" />
     <Compile Include="Application/Phase1ExtractorTests.fs" />
+    <Compile Include="Application/SessionCleanupServiceTests.fs" />
     <Compile Include="Application/HeartbeatServiceTests.fs" />
     <Compile Include="Channels/MarkdownParserTests.fs" />
     <Compile Include="Channels/ApiChannelTests.fs" />
