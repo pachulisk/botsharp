@@ -44,6 +44,7 @@
     <Compile Include="Infrastructure/MemoryModuleTests.fs" />
     <Compile Include="Infrastructure/UserHooksTests.fs" />
     <Compile Include="Infrastructure/TaskToolTests.fs" />
+    <Compile Include="Infrastructure/AskUserToolTests.fs" />
     <Compile Include="Infrastructure/JobQueueTests.fs" />
     <Compile Include="Infrastructure/CronServiceTests.fs" />
     <Compile Include="Infrastructure/CronToolTests.fs" />
