@@ -1702,8 +1702,75 @@ let ``trimToContextWindow contextBlockLimit=None with contextWindowTokens=0 disa
     Assert.Equal<Message list>(msgs, result)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// messageTokens — ToolResultMessage branch
+// estimateTokens — direct unit tests
 // ═══════════════════════════════════════════════════════════════════════════
+
+[<Fact>]
+let ``estimateTokens empty string returns 1 (minimum)`` () =
+    // Empty string → 0 bytes → max 1 ((0+3)/4) = max 1 0 = 1
+    Assert.Equal(1, estimateTokens "")
+
+[<Fact>]
+let ``estimateTokens single ASCII char returns 1`` () =
+    // 1 byte → (1+3)/4 = 1 → max 1 1 = 1
+    Assert.Equal(1, estimateTokens "x")
+
+[<Fact>]
+let ``estimateTokens four ASCII chars returns 1`` () =
+    // 4 bytes → (4+3)/4 = 1 → 1 token
+    Assert.Equal(1, estimateTokens "abcd")
+
+[<Fact>]
+let ``estimateTokens five ASCII chars returns 2`` () =
+    // 5 bytes → (5+3)/4 = 2 → 2 tokens
+    Assert.Equal(2, estimateTokens "abcde")
+
+[<Fact>]
+let ``estimateTokens 400 ASCII chars returns 100`` () =
+    // 400 bytes → (400+3)/4 = 100 → 100 tokens
+    Assert.Equal(100, estimateTokens (String.replicate 400 "a"))
+
+[<Fact>]
+let ``estimateTokens CJK text costs more than ASCII of same length`` () =
+    // Each CJK char is 3 UTF-8 bytes vs 1 ASCII byte → higher token estimate
+    let ascii = String.replicate 20 "a"
+    let cjk   = String.replicate 20 "中"  // 20 × 3 = 60 bytes
+    Assert.True(estimateTokens cjk > estimateTokens ascii,
+                "CJK text should cost more tokens than equivalent-length ASCII")
+
+[<Fact>]
+let ``estimateTokens result is always at least 1 for any input`` () =
+    // Invariant: estimateTokens never returns 0
+    Assert.True(estimateTokens ""    >= 1)
+    Assert.True(estimateTokens " "   >= 1)
+    Assert.True(estimateTokens "abc" >= 1)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// messageTokens — ToolResultMessage branch + missing branches
+// ═══════════════════════════════════════════════════════════════════════════
+
+[<Fact>]
+let ``messageTokens SystemMessage returns at least 4 overhead tokens`` () =
+    // Overhead per message = 4; empty string → estimateTokens "" = 1 → total ≥ 4
+    let tokens = messageTokens (SystemMessage "")
+    Assert.True(tokens >= 4, $"Expected at least 4 for SystemMessage, got {tokens}")
+
+[<Fact>]
+let ``messageTokens SystemMessage grows with content length`` () =
+    let short = messageTokens (SystemMessage "hi")
+    let long  = messageTokens (SystemMessage (String.replicate 400 "x"))
+    Assert.True(long > short, $"Longer SystemMessage should cost more tokens: short={short}, long={long}")
+
+[<Fact>]
+let ``messageTokens UserMessage returns at least 4 overhead tokens`` () =
+    let tokens = messageTokens (UserMessage ("", []))
+    Assert.True(tokens >= 4, $"Expected at least 4 for UserMessage, got {tokens}")
+
+[<Fact>]
+let ``messageTokens UserMessage grows with content length`` () =
+    let short = messageTokens (UserMessage ("hi", []))
+    let long  = messageTokens (UserMessage (String.replicate 400 "x", []))
+    Assert.True(long > short, $"Longer UserMessage should cost more tokens: short={short}, long={long}")
 
 [<Fact>]
 let ``messageTokens ToolResultMessage returns positive token count`` () =
