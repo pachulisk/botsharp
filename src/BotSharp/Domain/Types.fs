@@ -71,6 +71,9 @@ type SlashCommand =
     | ListSessions  of page: int option           // /sessions [page]
     | SearchSessions of query: string             // /search <keyword>
     | RebuildIndex                                // /rebuild-index
+    | ShowJobs     of kind: string option             // /jobs [kind]
+    | TaskCmd      of subcommand: string option     // /task, /task add ..., /task done ..., /task clear
+    | ShowEvents   of category: string option       // /events [category]
     | Dream
     | DreamLog     of sha: string option
     | DreamRestore of sha: string option
@@ -542,8 +545,8 @@ type SseFrame =
 /// accidentally call OnDelta when WantsStreaming = false.
 type AgentStreamHook =
     | NoStreaming
-    | StreamingHook of onDelta     : (string -> Async<unit>)
-                     * onStreamEnd : (bool   -> Async<unit>)
+    | StreamingHook of onDelta     : (StreamDelta -> Async<unit>)
+                     * onStreamEnd : (bool        -> Async<unit>)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // § 15  WebSocket events (WebUI multiplexed channel)
@@ -836,6 +839,23 @@ type BotSharpConfig = {
     TranscriptionProvider  : string      // voice transcription backend: "groq" or "openai" (Python: channels.transcription_provider; default "groq")
     TranscriptionLanguage  : string option // ISO-639-1 language hint for audio transcription (Python: channels.transcription_language; None = auto-detect)
     DreamAnnotateLineAges  : bool                      // annotate MEMORY.md lines with git-blame age in consolidation prompt (Python: dream.annotate_line_ages; default true)
+    MemorySummaryTokenLimit : int                       // token budget for memory_summary.md injection (Codex: 5000; default 5000)
+    MemoryDirectInjectLimit : int                       // MEMORY.md token threshold for switching to progressive mode (default 5000)
+    MemoryCitationTracking  : bool                      // enable <mem-citation> parsing and usage tracking (default true)
+    MemoryCitationStrip     : bool                      // strip citation blocks from agent output (default false = keep visible for debugging)
+    Phase1Model             : string option             // Phase 1 extraction model (None → provider recommendation → DefaultModel)
+    Phase1ReasoningEffort   : ReasoningEffort option    // Phase 1 reasoning level (None → Low)
+    Phase1MinIdleMinutes    : int                       // min idle time before Phase 1 extraction (default 30)
+    Phase1MaxPerPass        : int                       // max sessions per Phase 1 pass (default 20)
+    Phase1MaxUnusedDays     : int                       // stage1_outputs retention days (default 30)
+    Phase2Model             : string option             // Phase 2 consolidation model (None → provider recommendation → DefaultModel)
+    Phase2ReasoningEffort   : ReasoningEffort option    // Phase 2 reasoning level (None → Medium)
+    Phase2MaxRawMemories    : int                       // max stage1_outputs for Phase 2 input (default 50)
+    Phase2CooldownHours     : int                       // hours between Phase 2 runs (default 6)
+    Phase2Enabled           : bool                      // enable Phase 2 global consolidation (default true)
+    RlmChildModel           : string option             // override model for RLM child calls (None → Phase1 recommendation → DefaultModel)
+    RlmMaxDepth             : int                       // max recursion depth for rlm_query (default 1; 0 = rlm degrades to llm)
+    HookTimeout             : int                       // user hook command timeout in seconds (default 30)
     ProviderExtraHeaders   : Map<string, Map<string, string>> // per-provider custom HTTP headers (Python: providers.<id>.extra_headers; default {})
     ApiPort                : int option                // start OpenAI-compatible API server on this port from config file (Python: api.port; None = CLI flag only)
     ApiTimeoutSeconds      : int                       // per-request timeout for API server (Python: api.timeout; default 120)
@@ -997,6 +1017,23 @@ module BotSharpConfig =
         TranscriptionProvider  = "groq"           // "groq" = default voice transcription backend (Python: channels.transcription_provider)
         TranscriptionLanguage  = None             // None = auto-detect language (Python: channels.transcription_language)
         DreamAnnotateLineAges  = true             // true = annotate MEMORY.md lines with git-blame age (Python: dream.annotate_line_ages)
+        MemorySummaryTokenLimit = 5000            // 5000 token budget for memory_summary.md (Codex: MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT)
+        MemoryDirectInjectLimit = 5000            // MEMORY.md above this switches to progressive mode
+        MemoryCitationTracking  = true            // true = parse <mem-citation> and track usage (Codex: citations.rs)
+        MemoryCitationStrip     = false           // false = keep citations visible in output (debugging)
+        Phase1Model             = None            // None = use provider recommendation table, then DefaultModel
+        Phase1ReasoningEffort   = None            // None = Low (Phase 1 is structured extraction, no deep reasoning)
+        Phase1MinIdleMinutes    = 30              // 30 min idle before Phase 1 eligible
+        Phase1MaxPerPass        = 20              // max 20 sessions per Phase 1 batch
+        Phase1MaxUnusedDays     = 30              // prune stage1_outputs after 30 days unused
+        Phase2Model             = None            // None = use provider recommendation table, then DefaultModel
+        Phase2ReasoningEffort   = None            // None = Medium (Phase 2 needs cross-session synthesis)
+        Phase2MaxRawMemories    = 50              // max 50 stage1_outputs as Phase 2 input
+        Phase2CooldownHours     = 6               // 6-hour cooldown between Phase 2 runs (Codex parity)
+        Phase2Enabled           = true            // true = Phase 2 global consolidation runs
+        RlmChildModel           = None            // None = use Phase1 recommendation (cheap model), then DefaultModel
+        RlmMaxDepth             = 1               // 1 = rlm_query can recurse once; 0 = degrade to llm_query
+        HookTimeout             = 30              // 30 seconds per hook command
         ProviderExtraHeaders   = Map.empty        // {} = no custom headers per provider (Python: providers.<id>.extra_headers)
         ApiPort                = None             // None = API server started only via --api-port CLI flag (Python: api.port)
         ApiTimeoutSeconds      = 120              // 120 s per-request timeout for API server (Python: api.timeout)
@@ -1064,6 +1101,148 @@ type HeartbeatDecision =
     | SkipHeartbeat
 
 // ═══════════════════════════════════════════════════════════════════════════
+// § 20  Job queue types (SQLite-backed, Codex-style distributed queue)
+//
+// Supports concurrent claim with ownership tokens, lease expiry, heartbeat,
+// watermark-based change detection, and retry with exponential backoff.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Job kind constants. Corresponds to Codex JOB_KIND_* (memories.rs:19-22).
+[<RequireQualifiedAccess>]
+module JobKind =
+    let [<Literal>] Consolidation = "consolidation"
+    let [<Literal>] SessionCleanup = "session_cleanup"
+    let [<Literal>] MemoryStage1 = "memory_stage1"
+    let [<Literal>] MemoryPhase2 = "memory_phase2"
+
+/// Job claim result. Corresponds to Codex Stage1JobClaimOutcome (memories.rs:79-90).
+type ClaimOutcome =
+    | Claimed              of ownershipToken: string  // successfully claimed
+    | SkippedUpToDate                                 // last_success_watermark >= inputWatermark
+    | SkippedRetryBackoff                             // retry_at > now
+    | SkippedRetryExhausted                           // retry_remaining <= 0, watermark not advanced
+    | SkippedRunning                                  // already running with valid lease
+
+/// Job summary for queries and display.
+type JobSummary = {
+    Kind                : string
+    JobKey              : string
+    Status              : string
+    WorkerId            : string option
+    OwnershipToken      : string option
+    StartedAt           : int64 option
+    FinishedAt          : int64 option
+    LeaseUntil          : int64 option
+    RetryAt             : int64 option
+    RetryRemaining      : int
+    LastError           : string option
+    InputWatermark      : int64 option
+    LastSuccessWatermark: int64 option
+    CreatedAt           : int64
+    UpdatedAt           : int64
+}
+
+/// Job statistics per kind.
+type JobStats = {
+    TotalJobs : int
+    Running   : int
+    Done      : int
+    Error     : int
+}
+
+/// Result of one AutoCompact pass.
+type CompactPassResult = {
+    Processed : int
+    Succeeded : int
+    Skipped   : int
+    Failed    : int
+}
+
+/// Result of one SessionCleanup pass.
+type CleanupPassResult = {
+    Deleted : int
+    Failed  : int
+}
+
+/// Pending ask_user query awaiting user selection.
+/// The TCS is completed when the user responds; the ask_user tool awaits it.
+type PendingUserQuery = {
+    Question  : string
+    Options   : string list
+    Tcs       : System.Threading.Tasks.TaskCompletionSource<string>
+    TimeoutMs : int
+    CreatedAt : DateTimeOffset
+}
+
+/// Unified event for the EventBus. All system events flow through the bus;
+/// the default consumer (SqliteLogger) writes them to the event_log table.
+type BotEvent = {
+    Id        : string                 // UUID
+    Timestamp : DateTimeOffset
+    Category  : string                 // "llm" | "tool" | "session" | "stream" | "job" | "hook" | "system"
+    Kind      : string                 // "llm.call.start" | "tool.exec.end" | ...
+    SessionId : string option
+    Data      : Map<string, string>    // flattened key-value event data
+}
+
+/// Task item for dual agent/user task management (persisted in SQLite).
+type TaskItem = {
+    Id          : string
+    SessionId   : string option
+    Subject     : string
+    Description : string option
+    Status      : string         // "pending" | "in_progress" | "completed"
+    CreatedAt   : int64
+    UpdatedAt   : int64
+    CompletedAt : int64 option
+    CreatedBy   : string         // "agent" | "user"
+}
+
+/// Phase 1 structured output from LLM. Codex StageOneOutput (phase1.rs:135-146).
+type Phase1Output = {
+    RawMemory      : string        // detailed Markdown with YAML frontmatter
+    RolloutSummary : string        // one-line summary for navigation
+    RolloutSlug    : string option // filesystem-safe identifier (max 60 chars)
+}
+
+/// Stage 1 output record from SQLite (query result).
+type Stage1Output = {
+    SessionId                       : string
+    SourceUpdatedAt                 : int64
+    RawMemory                       : string
+    RolloutSummary                  : string
+    RolloutSlug                     : string option
+    GeneratedAt                     : int64
+    Cwd                             : string option
+    Channel                         : string option
+    UsageCount                      : int
+    LastUsage                       : int64 option
+    SelectedForPhase2               : bool
+    SelectedForPhase2SourceUpdatedAt: int64 option
+}
+
+/// Result of one Phase 1 extraction pass.
+type Phase1PassResult = {
+    Claimed   : int
+    Succeeded : int
+    NoOutput  : int
+    Failed    : int
+    Pruned    : int
+}
+
+/// Phase 1 single-job outcome.
+type Phase1JobOutcome =
+    | SucceededWithOutput
+    | SucceededNoOutput
+    | Phase1Failed
+
+/// Phase 2 execution outcome.
+type Phase2Outcome =
+    | Phase2Succeeded of memoriesProcessed: int
+    | Phase2Skipped   of reason: string
+    | Phase2Failed    of error: string
+
+// ═══════════════════════════════════════════════════════════════════════════
 // § 22  AgentHook — lifecycle callbacks for agent loop iterations
 //
 // Mirrors Python's AgentHook class (nanobot/agent/hook.py).
@@ -1121,6 +1300,14 @@ type AgentHook = {
     AfterIteration      : AgentHookContext -> Async<unit>
     /// Pipeline to transform or suppress the final assistant reply.
     FinalizeContent     : AgentHookContext -> string option -> string option
+    /// Called before each individual tool call. Error result = block the tool.
+    BeforeToolCall      : AgentHookContext -> ToolCall -> Async<Result<unit, string>>
+    /// Called after each individual tool call. Can transform the result.
+    AfterToolCall       : AgentHookContext -> ToolCall -> ToolResult -> Async<ToolResult>
+    /// Called before the final reply is sent. None = suppress the message.
+    PreSendMessage      : AgentHookContext -> string -> Async<string option>
+    /// Called once when the turn is fully complete.
+    OnTurnComplete      : AgentHookContext -> Async<unit>
 }
 
 module AgentHook =
@@ -1133,6 +1320,10 @@ module AgentHook =
         BeforeExecuteTools = fun _ -> async.Return ()
         AfterIteration     = fun _ -> async.Return ()
         FinalizeContent    = fun _ content -> content
+        BeforeToolCall     = fun _ _ -> async.Return (Result.Ok ())
+        AfterToolCall      = fun _ _ r -> async.Return r
+        PreSendMessage     = fun _ text -> async.Return (Some text)
+        OnTurnComplete     = fun _ -> async.Return ()
     }
 
     /// Create a fresh context for the given iteration and message list.
@@ -1173,7 +1364,35 @@ module AgentHook =
               BeforeExecuteTools = fun ctx -> async { for h in hooks do do! tryInvoke (fun () -> h.BeforeExecuteTools ctx) }
               AfterIteration     = fun ctx -> async { for h in hooks do do! tryInvoke (fun () -> h.AfterIteration ctx) }
               FinalizeContent    = fun ctx content ->
-                  hooks |> List.fold (fun acc h -> h.FinalizeContent ctx acc) content }
+                  hooks |> List.fold (fun acc h -> h.FinalizeContent ctx acc) content
+              BeforeToolCall     = fun ctx call -> async {
+                  let mutable result = Result.Ok ()
+                  for h in hooks do
+                      match result with
+                      | Result.Error _ -> ()   // short-circuit: first Error wins
+                      | Result.Ok () ->
+                          try let! r = h.BeforeToolCall ctx call
+                              result <- r
+                          with _ -> ()
+                  return result }
+              AfterToolCall      = fun ctx call r -> async {
+                  let mutable result = r
+                  for h in hooks do
+                      try let! r' = h.AfterToolCall ctx call result
+                          result <- r'
+                      with _ -> ()
+                  return result }
+              PreSendMessage     = fun ctx text -> async {
+                  let mutable current = Some text
+                  for h in hooks do
+                      match current with
+                      | None -> ()   // short-circuit: first None suppresses
+                      | Some t ->
+                          try let! r = h.PreSendMessage ctx t
+                              current <- r
+                          with _ -> ()
+                  return current }
+              OnTurnComplete     = fun ctx -> async { for h in hooks do do! tryInvoke (fun () -> h.OnTurnComplete ctx) } }
 
 // ── Path utilities ───────────────────────────────────────────────────────────
 

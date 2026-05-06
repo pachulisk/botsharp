@@ -104,7 +104,7 @@ let private bestEffort (label: string) (op: Async<unit>) : Async<unit> =
 
 // ── Migration ────────────────────────────────────────────────────────────
 
-let private CURRENT_VERSION = 1
+let private CURRENT_VERSION = 5
 
 let private migrationV1 = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -147,6 +147,88 @@ CREATE TABLE IF NOT EXISTS memory_usage (
 PRAGMA user_version = 1;
 """
 
+let private migrationV2 = """
+CREATE TABLE IF NOT EXISTS jobs (
+    kind                    TEXT NOT NULL,
+    job_key                 TEXT NOT NULL,
+    status                  TEXT NOT NULL,
+    worker_id               TEXT,
+    ownership_token         TEXT,
+    started_at              INTEGER,
+    finished_at             INTEGER,
+    lease_until             INTEGER,
+    retry_at                INTEGER,
+    retry_remaining         INTEGER NOT NULL,
+    last_error              TEXT,
+    input_watermark         INTEGER,
+    last_success_watermark  INTEGER,
+    created_at              INTEGER NOT NULL,
+    updated_at              INTEGER NOT NULL,
+    PRIMARY KEY (kind, job_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_kind_status_retry_lease
+    ON jobs(kind, status, retry_at, lease_until);
+
+PRAGMA user_version = 2;
+"""
+
+let private migrationV3 = """
+CREATE TABLE IF NOT EXISTS stage1_outputs (
+    session_id                              TEXT PRIMARY KEY,
+    source_updated_at                       INTEGER NOT NULL,
+    raw_memory                              TEXT NOT NULL,
+    rollout_summary                         TEXT NOT NULL,
+    rollout_slug                            TEXT,
+    generated_at                            INTEGER NOT NULL,
+    cwd                                     TEXT,
+    channel                                 TEXT,
+    usage_count                             INTEGER DEFAULT 0,
+    last_usage                              INTEGER,
+    selected_for_phase2                     INTEGER NOT NULL DEFAULT 0,
+    selected_for_phase2_source_updated_at   INTEGER,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_stage1_outputs_source_updated_at
+    ON stage1_outputs(source_updated_at DESC, session_id DESC);
+
+PRAGMA user_version = 3;
+"""
+
+let private migrationV4 = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT,
+    subject         TEXT NOT NULL,
+    description     TEXT,
+    status          TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    completed_at    INTEGER,
+    created_by      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at DESC);
+
+PRAGMA user_version = 4;
+"""
+
+let private migrationV5 = """
+CREATE TABLE IF NOT EXISTS event_log (
+    id          TEXT PRIMARY KEY,
+    timestamp   INTEGER NOT NULL,
+    category    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    session_id  TEXT,
+    data        TEXT,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_log_kind ON event_log(kind, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_event_log_session ON event_log(session_id, timestamp DESC);
+
+PRAGMA user_version = 5;
+"""
+
 let private configureSqlite (conn: SqliteConnection) : unit =
     use cmd = conn.CreateCommand()
     cmd.CommandText <- "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;"
@@ -154,11 +236,31 @@ let private configureSqlite (conn: SqliteConnection) : unit =
 
 let private migrate (conn: SqliteConnection) : unit =
     let currentVersion = queryScalarInt conn "PRAGMA user_version"
-    if currentVersion < CURRENT_VERSION then
+    if currentVersion < 1 then
         use cmd = conn.CreateCommand()
         cmd.CommandText <- migrationV1
         cmd.ExecuteNonQuery() |> ignore
-        eprintfn "[StateDb] Migrated to schema v%d" CURRENT_VERSION
+        eprintfn "[StateDb] Migrated to schema v1"
+    if currentVersion < 2 then
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- migrationV2
+        cmd.ExecuteNonQuery() |> ignore
+        eprintfn "[StateDb] Migrated to schema v2 (jobs table)"
+    if currentVersion < 3 then
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- migrationV3
+        cmd.ExecuteNonQuery() |> ignore
+        eprintfn "[StateDb] Migrated to schema v3 (stage1_outputs table)"
+    if currentVersion < 4 then
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- migrationV4
+        cmd.ExecuteNonQuery() |> ignore
+        eprintfn "[StateDb] Migrated to schema v4 (tasks table)"
+    if currentVersion < 5 then
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- migrationV5
+        cmd.ExecuteNonQuery() |> ignore
+        eprintfn "[StateDb] Migrated to schema v5 (event_log table)"
 
 // ── Init ─────────────────────────────────────────────────────────────────
 
@@ -353,11 +455,69 @@ let getSessionStats (conn: SqliteConnection) (sessionId: SessionId) : Async<Sess
         else return None
     }
 
-/// List stale sessions for cleanup.
+/// List stale sessions for cleanup (idle > staleDays).
 let listStaleSessionsForCleanup (conn: SqliteConnection) (staleDays: int) (limit: int) : Async<SessionIndexEntry list> =
     async {
         let cutoff = toUnixMs (DateTimeOffset.UtcNow.AddDays(- float staleDays))
-        return! listSessions conn 0 limit None  // simplified — filter by updated_at < cutoff in full impl
+        let sql = $"SELECT id, channel, chat_id, created_at, updated_at, message_count, last_consolidated, first_user_message, title, archived_at FROM sessions WHERE updated_at < @cutoff ORDER BY updated_at ASC LIMIT {limit}"
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- sql
+        cmd.Parameters.AddWithValue("@cutoff", cutoff) |> ignore
+        use reader = cmd.ExecuteReader()
+        let results = System.Collections.Generic.List<SessionIndexEntry>()
+        while reader.Read() do
+            results.Add({
+                Id               = SessionId (reader.GetString(0))
+                Channel          = reader.GetString(1)
+                ChatId           = if reader.IsDBNull(2) then None else Some (reader.GetString(2))
+                CreatedAt        = fromUnixMs (reader.GetInt64(3))
+                UpdatedAt        = fromUnixMs (reader.GetInt64(4))
+                MessageCount     = reader.GetInt32(5)
+                LastConsolidated = reader.GetInt32(6)
+                FirstUserMessage = if reader.IsDBNull(7) then None else Some (reader.GetString(7))
+                Title            = if reader.IsDBNull(8) then None else Some (reader.GetString(8))
+                ArchivedAt       = if reader.IsDBNull(9) then None else Some (fromUnixMs (reader.GetInt64(9)))
+            })
+        return List.ofSeq results
+    }
+
+/// List sessions eligible for background compaction:
+///   - idle > ttlMinutes
+///   - unconsolidated messages >= memoryWindowSize
+///   - not in the active session set
+let listIdleSessionsForCompaction
+    (conn: SqliteConnection)
+    (ttlMinutes: int)
+    (memoryWindowSize: int)
+    (activeSids: Set<SessionId>)
+    (limit: int)
+    : Async<SessionIndexEntry list> =
+    async {
+        let cutoff = toUnixMs (DateTimeOffset.UtcNow.AddMinutes(- float ttlMinutes))
+        let sql = $"SELECT id, channel, chat_id, created_at, updated_at, message_count, last_consolidated, first_user_message, title, archived_at FROM sessions WHERE updated_at < @cutoff AND (message_count - last_consolidated) >= @windowSize ORDER BY updated_at ASC LIMIT {limit}"
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- sql
+        cmd.Parameters.AddWithValue("@cutoff", cutoff) |> ignore
+        cmd.Parameters.AddWithValue("@windowSize", memoryWindowSize) |> ignore
+        use reader = cmd.ExecuteReader()
+        let results = System.Collections.Generic.List<SessionIndexEntry>()
+        while reader.Read() do
+            let entry = {
+                Id               = SessionId (reader.GetString(0))
+                Channel          = reader.GetString(1)
+                ChatId           = if reader.IsDBNull(2) then None else Some (reader.GetString(2))
+                CreatedAt        = fromUnixMs (reader.GetInt64(3))
+                UpdatedAt        = fromUnixMs (reader.GetInt64(4))
+                MessageCount     = reader.GetInt32(5)
+                LastConsolidated = reader.GetInt32(6)
+                FirstUserMessage = if reader.IsDBNull(7) then None else Some (reader.GetString(7))
+                Title            = if reader.IsDBNull(8) then None else Some (reader.GetString(8))
+                ArchivedAt       = if reader.IsDBNull(9) then None else Some (fromUnixMs (reader.GetInt64(9)))
+            }
+            // Filter out active sessions (in-memory MailboxProcessor actors)
+            if not (Set.contains entry.Id activeSids) then
+                results.Add(entry)
+        return List.ofSeq results
     }
 
 // ── Rebuild index (safety net) ───────────────────────────────────────────
@@ -410,4 +570,201 @@ let rebuildIndex (workspacePath: string) (conn: SqliteConnection) : Async<Rebuil
             sessionsIndexed consolidationsIndexed errors.Length
 
         return { SessionsIndexed = sessionsIndexed; ConsolidationsIndexed = consolidationsIndexed; Errors = errors }
+    }
+
+// ── Stage 1 outputs (two-phase memory) ──────────────────────────────────
+
+/// Upsert a Phase 1 extraction output. Only overwrites if source is newer.
+let upsertStage1Output (conn: SqliteConnection) (output: Stage1Output) : Async<unit> =
+    async {
+        let sql =
+            "INSERT INTO stage1_outputs (" +
+            "session_id, source_updated_at, raw_memory, rollout_summary, " +
+            "rollout_slug, generated_at, cwd, channel" +
+            ") VALUES (@sid, @srcUpd, @rawMem, @summary, @slug, @genAt, @cwd, @ch) " +
+            "ON CONFLICT(session_id) DO UPDATE SET " +
+            "source_updated_at = excluded.source_updated_at, " +
+            "raw_memory = excluded.raw_memory, " +
+            "rollout_summary = excluded.rollout_summary, " +
+            "rollout_slug = excluded.rollout_slug, " +
+            "generated_at = excluded.generated_at " +
+            "WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at"
+        do! executeParam conn sql [
+            "@sid", box output.SessionId
+            "@srcUpd", box output.SourceUpdatedAt
+            "@rawMem", box output.RawMemory
+            "@summary", box output.RolloutSummary
+            "@slug", (match output.RolloutSlug with Some s -> box s | None -> box DBNull.Value)
+            "@genAt", box output.GeneratedAt
+            "@cwd", (match output.Cwd with Some s -> box s | None -> box DBNull.Value)
+            "@ch", (match output.Channel with Some s -> box s | None -> box DBNull.Value)
+        ]
+    }
+
+/// Select top-N stage1_outputs for Phase 2 input, ranked by usage_count and recency.
+/// Codex get_phase2_input_selection (memories.rs:347-413).
+let getPhase2InputSelection (conn: SqliteConnection) (maxCount: int) (maxUnusedDays: int) : Async<Stage1Output list> =
+    async {
+        let cutoff = toUnixMs (DateTimeOffset.UtcNow.AddDays(float -maxUnusedDays))
+        let sql =
+            "SELECT session_id, source_updated_at, raw_memory, rollout_summary, " +
+            "rollout_slug, generated_at, cwd, channel, usage_count, last_usage, " +
+            "selected_for_phase2, selected_for_phase2_source_updated_at " +
+            "FROM stage1_outputs " +
+            "WHERE (length(trim(raw_memory)) > 0 OR length(trim(rollout_summary)) > 0) " +
+            "AND ((last_usage IS NOT NULL AND last_usage >= @cutoff) " +
+            "OR (last_usage IS NULL AND source_updated_at >= @cutoff)) " +
+            "ORDER BY COALESCE(usage_count, 0) DESC, " +
+            "COALESCE(last_usage, source_updated_at) DESC, " +
+            "source_updated_at DESC, session_id DESC " +
+            "LIMIT @maxCount"
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- sql
+        cmd.Parameters.AddWithValue("@cutoff", cutoff) |> ignore
+        cmd.Parameters.AddWithValue("@maxCount", maxCount) |> ignore
+        use reader = cmd.ExecuteReader()
+        let results = System.Collections.Generic.List<Stage1Output>()
+        while reader.Read() do
+            results.Add({
+                SessionId = reader.GetString(0)
+                SourceUpdatedAt = reader.GetInt64(1)
+                RawMemory = reader.GetString(2)
+                RolloutSummary = reader.GetString(3)
+                RolloutSlug = if reader.IsDBNull(4) then None else Some (reader.GetString(4))
+                GeneratedAt = reader.GetInt64(5)
+                Cwd = if reader.IsDBNull(6) then None else Some (reader.GetString(6))
+                Channel = if reader.IsDBNull(7) then None else Some (reader.GetString(7))
+                UsageCount = if reader.IsDBNull(8) then 0 else reader.GetInt32(8)
+                LastUsage = if reader.IsDBNull(9) then None else Some (reader.GetInt64(9))
+                SelectedForPhase2 = if reader.IsDBNull(10) then false else reader.GetInt32(10) <> 0
+                SelectedForPhase2SourceUpdatedAt = if reader.IsDBNull(11) then None else Some (reader.GetInt64(11))
+            })
+        return List.ofSeq results
+    }
+
+/// Increment usage_count for stage1_outputs matching the given session IDs.
+let recordStage1OutputUsage (conn: SqliteConnection) (sessionIds: string list) : Async<unit> =
+    async {
+        let now = toUnixMs DateTimeOffset.UtcNow
+        for sid in sessionIds do
+            let sql = "UPDATE stage1_outputs SET usage_count = usage_count + 1, last_usage = @now WHERE session_id = @sid"
+            do! executeParam conn sql [ "@sid", box sid; "@now", box now ]
+    }
+
+/// Prune old stage1_outputs that haven't been used within maxUnusedDays.
+let pruneStage1Outputs (conn: SqliteConnection) (maxUnusedDays: int) (batchSize: int) : Async<int> =
+    async {
+        let cutoff = toUnixMs (DateTimeOffset.UtcNow.AddDays(float -maxUnusedDays))
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <-
+            "DELETE FROM stage1_outputs WHERE session_id IN (" +
+            "SELECT session_id FROM stage1_outputs " +
+            "WHERE (last_usage IS NOT NULL AND last_usage < @cutoff) " +
+            "OR (last_usage IS NULL AND source_updated_at < @cutoff) " +
+            "LIMIT @limit)"
+        cmd.Parameters.AddWithValue("@cutoff", cutoff) |> ignore
+        cmd.Parameters.AddWithValue("@limit", batchSize) |> ignore
+        return cmd.ExecuteNonQuery()
+    }
+
+// ── Task management (dual: agent + user) ────────────────────────────────
+
+/// Create a task. Returns the generated task ID.
+let createTask (conn: SqliteConnection) (sessionId: string option) (subject: string) (description: string option) (createdBy: string) : Async<string> =
+    async {
+        let id = Guid.NewGuid().ToString("N").[..5]
+        let now = toUnixMs DateTimeOffset.UtcNow
+        let sql =
+            "INSERT INTO tasks (id, session_id, subject, description, status, created_at, updated_at, created_by) " +
+            "VALUES (@id, @sid, @subject, @desc, 'pending', @now, @now, @by)"
+        do! executeParam conn sql [
+            "@id", box id
+            "@sid", (match sessionId with Some s -> box s | None -> box DBNull.Value)
+            "@subject", box subject
+            "@desc", (match description with Some d -> box d | None -> box DBNull.Value)
+            "@now", box now
+            "@by", box createdBy
+        ]
+        return id
+    }
+
+/// Update a task's status and/or subject.
+let updateTask (conn: SqliteConnection) (id: string) (status: string option) (subject: string option) : Async<bool> =
+    async {
+        let now = toUnixMs DateTimeOffset.UtcNow
+        let mutable sets = [ "updated_at = @now" ]
+        let mutable ps : (string * obj) list = [ "@id", box id; "@now", box now ]
+        match status with
+        | Some s ->
+            sets <- "status = @status" :: sets
+            ps <- ("@status", box s) :: ps
+            if s = "completed" then
+                sets <- "completed_at = @now" :: sets
+        | None -> ()
+        match subject with
+        | Some s ->
+            sets <- "subject = @subject" :: sets
+            ps <- ("@subject", box s) :: ps
+        | None -> ()
+        let sql = sprintf "UPDATE tasks SET %s WHERE id = @id" (String.concat ", " sets)
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- sql
+        for (name, value) in ps do
+            cmd.Parameters.AddWithValue(name, if isNull value then box DBNull.Value else value) |> ignore
+        return cmd.ExecuteNonQuery() > 0
+    }
+
+/// List tasks, optionally filtered by status.
+let listTasks (conn: SqliteConnection) (statusFilter: string option) (limit: int) : Async<TaskItem list> =
+    async {
+        let where = match statusFilter with Some s when s <> "all" -> sprintf " AND status = '%s'" s | _ -> ""
+        let sql =
+            sprintf "SELECT id, session_id, subject, description, status, created_at, updated_at, completed_at, created_by FROM tasks WHERE status != 'deleted'%s ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, updated_at DESC LIMIT %d" where limit
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- sql
+        use reader = cmd.ExecuteReader()
+        let results = Collections.Generic.List<TaskItem>()
+        while reader.Read() do
+            results.Add({
+                Id          = reader.GetString(0)
+                SessionId   = if reader.IsDBNull(1) then None else Some (reader.GetString(1))
+                Subject     = reader.GetString(2)
+                Description = if reader.IsDBNull(3) then None else Some (reader.GetString(3))
+                Status      = reader.GetString(4)
+                CreatedAt   = reader.GetInt64(5)
+                UpdatedAt   = reader.GetInt64(6)
+                CompletedAt = if reader.IsDBNull(7) then None else Some (reader.GetInt64(7))
+                CreatedBy   = reader.GetString(8)
+            })
+        return List.ofSeq results
+    }
+
+/// Get a single task by ID.
+let getTask (conn: SqliteConnection) (id: string) : Async<TaskItem option> =
+    async {
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- "SELECT id, session_id, subject, description, status, created_at, updated_at, completed_at, created_by FROM tasks WHERE id = @id"
+        cmd.Parameters.AddWithValue("@id", id) |> ignore
+        use reader = cmd.ExecuteReader()
+        if reader.Read() then
+            return Some {
+                Id = reader.GetString(0)
+                SessionId = if reader.IsDBNull(1) then None else Some (reader.GetString(1))
+                Subject = reader.GetString(2)
+                Description = if reader.IsDBNull(3) then None else Some (reader.GetString(3))
+                Status = reader.GetString(4)
+                CreatedAt = reader.GetInt64(5)
+                UpdatedAt = reader.GetInt64(6)
+                CompletedAt = if reader.IsDBNull(7) then None else Some (reader.GetInt64(7))
+                CreatedBy = reader.GetString(8)
+            }
+        else return None
+    }
+
+/// Delete all completed tasks.
+let clearCompletedTasks (conn: SqliteConnection) : Async<int> =
+    async {
+        use cmd = conn.CreateCommand()
+        cmd.CommandText <- "DELETE FROM tasks WHERE status = 'completed'"
+        return cmd.ExecuteNonQuery()
     }
