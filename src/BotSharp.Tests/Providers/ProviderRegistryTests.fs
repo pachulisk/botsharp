@@ -155,7 +155,7 @@ let ``buildProvider returns None when no API key is available`` () =
     let configWithNoKey = { config with ApiKeys = Map.empty }
     // If the env var happens to be set, the result may be Some — that's fine too.
     // This test verifies the function doesn't throw.
-    let result = buildProvider client "gpt-4o" openaiSpec configWithNoKey
+    let result = buildProvider client "gpt-4o" openaiSpec configWithNoKey (fun _ _ _ -> None)
     // We can't assert None reliably (env var might be set), just assert no crash.
     Assert.True(result.IsNone || result.IsSome)
 
@@ -163,14 +163,14 @@ let ``buildProvider returns None when no API key is available`` () =
 let ``buildProvider returns Some LLMProvider when API key is configured`` () =
     use client = new HttpClient()
     let config = { BotSharpConfig.defaults with ApiKeys = Map.ofList [ "openai", testKey ] }
-    let result = buildProvider client "gpt-4o" openaiSpec config
+    let result = buildProvider client "gpt-4o" openaiSpec config (fun _ _ _ -> None)
     Assert.True(result.IsSome, "Expected Some LLMProvider when API key is present")
 
 [<Fact>]
 let ``buildProvider returned provider has the correct Id`` () =
     use client = new HttpClient()
     let config = { BotSharpConfig.defaults with ApiKeys = Map.ofList [ "openai", testKey ] }
-    match buildProvider client "gpt-4o" openaiSpec config with
+    match buildProvider client "gpt-4o" openaiSpec config (fun _ _ _ -> None) with
     | None     -> Assert.Fail("Expected Some LLMProvider")
     | Some p   -> Assert.Equal("openai", p.Id)
 
@@ -191,7 +191,7 @@ let ``resolve uses DefaultProvider when model does not match any keyword`` () =
         { BotSharpConfig.defaults with
             DefaultProvider = "anthropic"
             ApiKeys = Map.ofList [ "anthropic", anthropicKey ] }
-    match resolve client "my-custom-llm" config with
+    match resolve client "my-custom-llm" config (fun _ _ _ -> None) with
     | None   -> Assert.Fail("Expected Some provider via DefaultProvider fallback")
     | Some p -> Assert.Equal("anthropic", p.Id)
 
@@ -203,14 +203,14 @@ let ``resolve uses DefaultProvider when model does not match any keyword`` () =
 let ``resolve returns Some for gpt-4o with openai API key`` () =
     use client = new HttpClient()
     let config = { BotSharpConfig.defaults with ApiKeys = Map.ofList [ "openai", testKey ] }
-    let result = resolve client "gpt-4o" config
+    let result = resolve client "gpt-4o" config (fun _ _ _ -> None)
     Assert.True(result.IsSome, "Expected Some provider for gpt-4o with API key")
 
 [<Fact>]
 let ``resolve returned provider Id is openai for gpt-4o`` () =
     use client = new HttpClient()
     let config = { BotSharpConfig.defaults with ApiKeys = Map.ofList [ "openai", testKey ] }
-    match resolve client "gpt-4o" config with
+    match resolve client "gpt-4o" config (fun _ _ _ -> None) with
     | None   -> Assert.Fail("Expected Some provider")
     | Some p -> Assert.Equal("openai", p.Id)
 
@@ -299,6 +299,6 @@ let ``resolve falls back to openai (first provider) when DefaultProvider is unkn
                     DefaultProvider = "no-such-provider"
                     ApiKeys = Map.ofList [ "openai", testKey ] }
     // "unknown-model-xyz" matches nothing → falls through to DefaultProvider lookup
-    match resolve client "unknown-model-xyz" config with
+    match resolve client "unknown-model-xyz" config (fun _ _ _ -> None) with
     | None   -> ()   // Key may not resolve — acceptable since DefaultProvider is invalid
     | Some p -> Assert.Equal("openai", p.Id)   // falls back to first provider (openai)

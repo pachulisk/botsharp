@@ -64,7 +64,8 @@ let private makeDeps (provider: LLMProvider) : AgentDependencies =
       RuleEngine        = None
       FallbackProviders = []
       OpenStateDb       = None
-      TokenTracker      = ref None }
+      TokenTracker      = ref None
+      EventBus          = None }
 
 let private makeInbound (text: string) (sid: string) : InboundMessage = {
     Channel            = ChannelId "cli"
@@ -296,7 +297,8 @@ let private makeDepsUnified () : AgentDependencies =
       RuleEngine        = None
       FallbackProviders = []
       OpenStateDb       = None
-      TokenTracker      = ref None }
+      TokenTracker      = ref None
+      EventBus          = None }
 
 [<Fact>]
 let ``unified_session routes all messages to 'unified:default' session`` () =

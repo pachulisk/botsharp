@@ -217,7 +217,7 @@ let ``chatStream emits TextDelta events`` () =
     let events = System.Collections.Generic.List<StreamEvent>()
     let emitter evt = async { events.Add(evt) }
     let result =
-        chatStream client baseUrl dummyKey model Map.empty settings messages [] false emitter
+        chatStream client baseUrl dummyKey model Map.empty settings messages [] false (fun _ _ _ -> None) emitter
         |> Async.RunSynchronously
     Assert.True(Result.isOk result, $"Expected Ok, got {result}")
     Assert.Equal(2, events.Count)
@@ -232,7 +232,7 @@ let ``chatStream emits TextDelta events`` () =
 let ``chatStream returns RateLimited on 429`` () =
     use client = makeClient (new StubHandler(HttpStatusCode.TooManyRequests, "limit"))
     let result =
-        chatStream client baseUrl dummyKey model Map.empty settings messages [] false (fun _ -> async { () })
+        chatStream client baseUrl dummyKey model Map.empty settings messages [] false (fun _ _ _ -> None) (fun _ -> async { () })
         |> Async.RunSynchronously
     match result with
     | Result.Error { Kind = RateLimited _ } -> ()
@@ -323,7 +323,7 @@ let ``resolve returns None when no API key is set`` () =
     // If env var OPENAI_API_KEY is set in CI, skip; otherwise verify None
     let key = ApiKey.tryFromEnv "OPENAI_API_KEY"
     if key.IsNone then
-        Assert.Equal(None, resolve client "gpt-4o-mini" config)
+        Assert.Equal(None, resolve client "gpt-4o-mini" config (fun _ _ _ -> None))
 
 [<Fact>]
 let ``chat returns ConnectionFailed on 401 Unauthorized`` () =
@@ -639,7 +639,7 @@ let ``chatStream with DataLine producing no event continues without emitting`` (
     let events = System.Collections.Generic.List<StreamEvent>()
     let emitter evt = async { events.Add(evt) }
     let result =
-        chatStream client baseUrl dummyKey model Map.empty settings messages [] false emitter
+        chatStream client baseUrl dummyKey model Map.empty settings messages [] false (fun _ _ _ -> None) emitter
         |> Async.RunSynchronously
     Assert.True(Result.isOk result, $"Expected Ok, got {result}")
     // No ContentDelta event emitted for empty delta

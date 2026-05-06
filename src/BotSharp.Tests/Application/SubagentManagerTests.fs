@@ -43,6 +43,7 @@ let private stubDeps : AgentDependencies = {
     FallbackProviders = []
     OpenStateDb       = None
     TokenTracker      = ref None
+    EventBus          = None
 }
 
 let private noopComplete : OnSubagentComplete = fun _ -> async { return () }

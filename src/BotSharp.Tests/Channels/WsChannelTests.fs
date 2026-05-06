@@ -68,7 +68,8 @@ let private mkDeps (reply: string) : AgentDependencies =
       RuleEngine        = None
       FallbackProviders = []
       OpenStateDb       = None
-      TokenTracker      = ref None }
+      TokenTracker      = ref None
+      EventBus          = None }
 
 /// Poll GET /health until the server responds 200 or the deadline is reached.
 /// Retries up to ~50 times with 20 ms between attempts (≤ 1 s total wait).

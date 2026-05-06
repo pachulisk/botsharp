@@ -91,7 +91,8 @@ let private makeDepsWithTools
       RuleEngine        = None
       FallbackProviders = []
       OpenStateDb       = None
-      TokenTracker      = ref None }
+      TokenTracker      = ref None
+      EventBus          = None }
 
 let private makeDeps (provider: LLMProvider) : AgentDependencies =
     makeDepsWithTools provider Map.empty
@@ -1261,13 +1262,14 @@ let private observingHook
     () : AgentHook * (unit -> string list) =
     let log = System.Collections.Generic.List<string>()
     let hook = {
-        WantsStreaming     = false
-        BeforeIteration    = fun ctx -> async { log.Add(sprintf "before:%d" ctx.Iteration) }
-        OnStream           = fun ctx d -> async { log.Add(sprintf "stream:%d:%s" ctx.Iteration d) }
-        OnStreamEnd        = fun ctx hasTools -> async { log.Add(sprintf "stream_end:%d:%b" ctx.Iteration hasTools) }
-        BeforeExecuteTools = fun ctx -> async { log.Add(sprintf "before_tools:%d" ctx.Iteration) }
-        AfterIteration     = fun ctx -> async { log.Add(sprintf "after:%d" ctx.Iteration) }
-        FinalizeContent    = fun _ content -> content
+        AgentHook.none with
+            WantsStreaming     = false
+            BeforeIteration    = fun ctx -> async { log.Add(sprintf "before:%d" ctx.Iteration) }
+            OnStream           = fun ctx d -> async { log.Add(sprintf "stream:%d:%s" ctx.Iteration d) }
+            OnStreamEnd        = fun ctx hasTools -> async { log.Add(sprintf "stream_end:%d:%b" ctx.Iteration hasTools) }
+            BeforeExecuteTools = fun ctx -> async { log.Add(sprintf "before_tools:%d" ctx.Iteration) }
+            AfterIteration     = fun ctx -> async { log.Add(sprintf "after:%d" ctx.Iteration) }
+            FinalizeContent    = fun _ content -> content
     }
     hook, (fun () -> log |> Seq.toList)
 
