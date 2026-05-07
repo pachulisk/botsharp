@@ -1287,3 +1287,78 @@ let ``exec_sandbox bwrap is parsed`` () =
     match parseJson json with
     | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
     | Ok cfg -> Assert.Equal("bwrap", cfg.ExecSandbox)
+
+// ── subagent_max_iterations ────────────────────────────────────────────────────
+
+[<Fact>]
+let ``subagent_max_iterations absent defaults to 15`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(15, cfg.SubagentMaxIterations)
+
+[<Fact>]
+let ``subagent_max_iterations value is parsed`` () =
+    let json = """{"subagent_max_iterations":25}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(25, cfg.SubagentMaxIterations)
+
+// ── context_block_limit ────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``context_block_limit absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(None, cfg.ContextBlockLimit)
+
+[<Fact>]
+let ``context_block_limit value is parsed as Some`` () =
+    let json = """{"context_block_limit":50}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(Some 50, cfg.ContextBlockLimit)
+
+// ── max_iterations_message ────────────────────────────────────────────────────
+
+[<Fact>]
+let ``max_iterations_message absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(None, cfg.MaxIterationsMessage)
+
+[<Fact>]
+let ``max_iterations_message value is parsed as Some`` () =
+    let json = """{"max_iterations_message":"Stopped after too many steps."}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(Some "Stopped after too many steps.", cfg.MaxIterationsMessage)
+
+// ── fail_on_tool_error ────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``fail_on_tool_error absent defaults to false`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.False(cfg.FailOnToolError)
+
+[<Fact>]
+let ``fail_on_tool_error true is parsed`` () =
+    let json = """{"fail_on_tool_error":true}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.FailOnToolError)
+
+// ── session_cleanup_days ──────────────────────────────────────────────────────
+
+[<Fact>]
+let ``session_cleanup_days absent defaults to 0`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(0, cfg.SessionCleanupDays)
+
+[<Fact>]
+let ``session_cleanup_days value is parsed`` () =
+    let json = """{"session_cleanup_days":30}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(30, cfg.SessionCleanupDays)
