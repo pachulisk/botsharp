@@ -1377,3 +1377,78 @@ let ``max_messages value is parsed`` () =
     match parseJson json with
     | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
     | Ok cfg -> Assert.Equal(200, cfg.MaxMessages)
+
+// ── memory_citation_tracking ─────────────────────────────────────────────────
+
+[<Fact>]
+let ``memory_citation_tracking absent defaults to true`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.MemoryCitationTracking)
+
+[<Fact>]
+let ``memory_citation_tracking false is parsed`` () =
+    let json = """{"memory_citation_tracking":false}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.False(cfg.MemoryCitationTracking)
+
+// ── memory_citation_strip ─────────────────────────────────────────────────────
+
+[<Fact>]
+let ``memory_citation_strip absent defaults to false`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.False(cfg.MemoryCitationStrip)
+
+[<Fact>]
+let ``memory_citation_strip true is parsed`` () =
+    let json = """{"memory_citation_strip":true}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.MemoryCitationStrip)
+
+// ── phase2_enabled ────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``phase2_enabled absent defaults to true`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Phase2Enabled)
+
+[<Fact>]
+let ``phase2_enabled false is parsed`` () =
+    let json = """{"phase2_enabled":false}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.False(cfg.Phase2Enabled)
+
+// ── rlm_max_depth ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``rlm_max_depth absent defaults to 1`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(1, cfg.RlmMaxDepth)
+
+[<Fact>]
+let ``rlm_max_depth value is parsed`` () =
+    let json = """{"rlm_max_depth":3}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(3, cfg.RlmMaxDepth)
+
+// ── hook_timeout ──────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``hook_timeout absent defaults to 30`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(30, cfg.HookTimeout)
+
+[<Fact>]
+let ``hook_timeout value is parsed`` () =
+    let json = """{"hook_timeout":60}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(60, cfg.HookTimeout)
