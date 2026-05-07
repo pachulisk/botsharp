@@ -1362,3 +1362,18 @@ let ``session_cleanup_days value is parsed`` () =
     match parseJson json with
     | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
     | Ok cfg -> Assert.Equal(30, cfg.SessionCleanupDays)
+
+// ── max_messages ──────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``max_messages absent defaults to 0 (unlimited)`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(0, cfg.MaxMessages)
+
+[<Fact>]
+let ``max_messages value is parsed`` () =
+    let json = """{"max_messages":200}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(200, cfg.MaxMessages)
