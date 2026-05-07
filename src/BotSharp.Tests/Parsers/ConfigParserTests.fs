@@ -1546,3 +1546,456 @@ let ``phase2_model value is parsed as Some`` () =
     match parseJson json with
     | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
     | Ok cfg -> Assert.Equal(Some "claude-sonnet-4-6", cfg.Phase2Model)
+
+// ── discord section ────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``discord section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Discord.IsNone)
+
+[<Fact>]
+let ``discord section without token is silently skipped`` () =
+    let json = """{"discord":{"allow_from":["*"]}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Discord.IsNone)
+
+[<Fact>]
+let ``discord section with token parses correctly`` () =
+    let json = """{"discord":{"token":"Bot.my-token-abc"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Discord with
+        | None -> Assert.Fail("Expected Some DiscordChannelConfig")
+        | Some dc ->
+            Assert.Equal("Bot.my-token-abc", dc.Token)
+            Assert.Equal(AnyoneAllowed, dc.AllowFrom)
+
+[<Fact>]
+let ``discord allow_from wildcard becomes AnyoneAllowed`` () =
+    let json = """{"discord":{"token":"tok","allow_from":["*"]}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Discord with
+        | None -> Assert.Fail("Expected Some DiscordChannelConfig")
+        | Some dc -> Assert.Equal(AnyoneAllowed, dc.AllowFrom)
+
+[<Fact>]
+let ``discord allow_from specific users becomes AllowedSet`` () =
+    let json = """{"discord":{"token":"tok","allow_from":["123456789","987654321"]}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Discord with
+        | None -> Assert.Fail("Expected Some DiscordChannelConfig")
+        | Some dc ->
+            match dc.AllowFrom with
+            | AllowedSet s -> Assert.Equal(2, s.Count)
+            | AnyoneAllowed -> Assert.Fail("Expected AllowedSet, got AnyoneAllowed")
+
+// ── slack section ──────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``slack section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Slack.IsNone)
+
+[<Fact>]
+let ``slack section without bot_token or app_token is silently skipped`` () =
+    let json = """{"slack":{"bot_token":"xoxb-token"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Slack.IsNone)
+
+[<Fact>]
+let ``slack section with both tokens parses correctly`` () =
+    let json = """{"slack":{"bot_token":"xoxb-bot","app_token":"xapp-app"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Slack with
+        | None -> Assert.Fail("Expected Some SlackChannelConfig")
+        | Some sl ->
+            Assert.Equal("xoxb-bot", sl.BotToken)
+            Assert.Equal("xapp-app", sl.AppToken)
+            Assert.True(sl.ReplyInThread)   // default
+
+[<Fact>]
+let ``slack reply_in_thread false is parsed`` () =
+    let json = """{"slack":{"bot_token":"xoxb-bot","app_token":"xapp-app","reply_in_thread":false}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Slack with
+        | None -> Assert.Fail("Expected Some SlackChannelConfig")
+        | Some sl -> Assert.False(sl.ReplyInThread)
+
+// ── feishu section ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``feishu section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Feishu.IsNone)
+
+[<Fact>]
+let ``feishu section without app_id is silently skipped`` () =
+    let json = """{"feishu":{"app_secret":"secret"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Feishu.IsNone)
+
+[<Fact>]
+let ``feishu section with app_id and app_secret parses correctly`` () =
+    let json = """{"feishu":{"app_id":"cli_abc","app_secret":"secret123"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Feishu with
+        | None -> Assert.Fail("Expected Some FeishuChannelConfig")
+        | Some fs ->
+            Assert.Equal("cli_abc", fs.AppId)
+            Assert.Equal("secret123", fs.AppSecret)
+            Assert.Equal("", fs.VerificationToken)    // default
+            Assert.Equal(19800, fs.WebhookPort)        // default
+
+[<Fact>]
+let ``feishu webhook_port is parsed correctly`` () =
+    let json = """{"feishu":{"app_id":"id","app_secret":"sec","webhook_port":9999}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Feishu with
+        | None -> Assert.Fail("Expected Some FeishuChannelConfig")
+        | Some fs -> Assert.Equal(9999, fs.WebhookPort)
+
+// ── dingtalk section ───────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``dingtalk section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.DingTalk.IsNone)
+
+[<Fact>]
+let ``dingtalk section without client_secret is silently skipped`` () =
+    let json = """{"dingtalk":{"client_id":"my-client"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.DingTalk.IsNone)
+
+[<Fact>]
+let ``dingtalk section with client_id and client_secret parses correctly`` () =
+    let json = """{"dingtalk":{"client_id":"my-id","client_secret":"my-secret"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.DingTalk with
+        | None -> Assert.Fail("Expected Some DingTalkChannelConfig")
+        | Some dt ->
+            Assert.Equal("my-id", dt.ClientId)
+            Assert.Equal("my-secret", dt.ClientSecret)
+            Assert.Equal(19801, dt.WebhookPort)   // default
+
+[<Fact>]
+let ``dingtalk webhook_port custom value is parsed`` () =
+    let json = """{"dingtalk":{"client_id":"id","client_secret":"sec","webhook_port":8888}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.DingTalk with
+        | None -> Assert.Fail("Expected Some DingTalkChannelConfig")
+        | Some dt -> Assert.Equal(8888, dt.WebhookPort)
+
+// ── email section ──────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``email section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Email.IsNone)
+
+[<Fact>]
+let ``email section without all required fields is silently skipped`` () =
+    let json = """{"email":{"username":"user@example.com","password":"pass","imap_host":"imap.example.com"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Email.IsNone)
+
+[<Fact>]
+let ``email section with all required fields parses correctly`` () =
+    let json = """{"email":{"username":"u@x.com","password":"p","imap_host":"imap.x.com","smtp_host":"smtp.x.com"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Email with
+        | None -> Assert.Fail("Expected Some EmailChannelConfig")
+        | Some em ->
+            Assert.Equal("u@x.com", em.Username)
+            Assert.Equal("p", em.Password)
+            Assert.Equal("imap.x.com", em.ImapHost)
+            Assert.Equal("smtp.x.com", em.SmtpHost)
+            Assert.Equal(993,  em.ImapPort)    // default
+            Assert.Equal(587,  em.SmtpPort)    // default
+            Assert.True(em.ImapUseSsl)          // default
+            Assert.True(em.SmtpUseTls)          // default
+            Assert.Equal(30, em.PollSeconds)    // default
+
+[<Fact>]
+let ``email imap_port and smtp_port custom values are parsed`` () =
+    let json = """{"email":{"username":"u","password":"p","imap_host":"imap","smtp_host":"smtp","imap_port":143,"smtp_port":25}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Email with
+        | None -> Assert.Fail("Expected Some EmailChannelConfig")
+        | Some em ->
+            Assert.Equal(143, em.ImapPort)
+            Assert.Equal(25, em.SmtpPort)
+
+// ── whatsapp section ───────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``whatsapp section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.WhatsApp.IsNone)
+
+[<Fact>]
+let ``whatsapp section without access_token is silently skipped`` () =
+    let json = """{"whatsapp":{"phone_number_id":"12345"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.WhatsApp.IsNone)
+
+[<Fact>]
+let ``whatsapp section with phone_number_id and access_token parses correctly`` () =
+    let json = """{"whatsapp":{"phone_number_id":"12345","access_token":"EAAtoken"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.WhatsApp with
+        | None -> Assert.Fail("Expected Some WhatsAppChannelConfig")
+        | Some wa ->
+            Assert.Equal("12345", wa.PhoneNumberId)
+            Assert.Equal("EAAtoken", wa.AccessToken)
+            Assert.Equal("", wa.VerifyToken)     // default
+            Assert.Equal(19802, wa.WebhookPort)  // default
+
+[<Fact>]
+let ``whatsapp verify_token and webhook_port are parsed correctly`` () =
+    let json = """{"whatsapp":{"phone_number_id":"p","access_token":"t","verify_token":"vt","webhook_port":9000}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.WhatsApp with
+        | None -> Assert.Fail("Expected Some WhatsAppChannelConfig")
+        | Some wa ->
+            Assert.Equal("vt", wa.VerifyToken)
+            Assert.Equal(9000, wa.WebhookPort)
+
+// ── mochat section ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``mochat section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.MoChat.IsNone)
+
+[<Fact>]
+let ``mochat section without claw_token is silently skipped`` () =
+    let json = """{"mochat":{"base_url":"http://localhost:9527"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.MoChat.IsNone)
+
+[<Fact>]
+let ``mochat section with base_url and claw_token parses correctly`` () =
+    let json = """{"mochat":{"base_url":"http://host:9527","claw_token":"mytoken"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.MoChat with
+        | None -> Assert.Fail("Expected Some MoChatChannelConfig")
+        | Some mc ->
+            Assert.Equal("http://host:9527", mc.BaseUrl)
+            Assert.Equal("mytoken", mc.ClawToken)
+            Assert.Equal(5, mc.PollSeconds)   // default
+
+[<Fact>]
+let ``mochat poll_interval_seconds custom value is parsed`` () =
+    let json = """{"mochat":{"base_url":"http://h","claw_token":"t","poll_interval_seconds":15}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.MoChat with
+        | None -> Assert.Fail("Expected Some MoChatChannelConfig")
+        | Some mc -> Assert.Equal(15, mc.PollSeconds)
+
+// ── qq section ─────────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``qq section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.QQ.IsNone)
+
+[<Fact>]
+let ``qq section without secret is silently skipped`` () =
+    let json = """{"qq":{"app_id":"myapp"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.QQ.IsNone)
+
+[<Fact>]
+let ``qq section with app_id and secret parses correctly`` () =
+    let json = """{"qq":{"app_id":"myapp","secret":"mysecret"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.QQ with
+        | None -> Assert.Fail("Expected Some QQChannelConfig")
+        | Some qq ->
+            Assert.Equal("myapp", qq.AppId)
+            Assert.Equal("mysecret", qq.Secret)
+            Assert.False(qq.Sandbox)   // default
+
+[<Fact>]
+let ``qq sandbox true is parsed`` () =
+    let json = """{"qq":{"app_id":"id","secret":"sec","sandbox":true}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.QQ with
+        | None -> Assert.Fail("Expected Some QQChannelConfig")
+        | Some qq -> Assert.True(qq.Sandbox)
+
+// ── matrix section ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``matrix section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Matrix.IsNone)
+
+[<Fact>]
+let ``matrix section without access_token is silently skipped`` () =
+    let json = """{"matrix":{"homeserver":"https://matrix.org","user_id":"@bot:matrix.org"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Matrix.IsNone)
+
+[<Fact>]
+let ``matrix section with all required fields parses correctly`` () =
+    let json = """{"matrix":{"homeserver":"https://m.org","user_id":"@bot:m.org","access_token":"syt_token"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Matrix with
+        | None -> Assert.Fail("Expected Some MatrixChannelConfig")
+        | Some mx ->
+            Assert.Equal("https://m.org", mx.Homeserver)
+            Assert.Equal("@bot:m.org", mx.UserId)
+            Assert.Equal("syt_token", mx.AccessToken)
+            Assert.Equal(AnyoneAllowed, mx.AllowFrom)
+
+// ── telnet section ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``telnet section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.Telnet.IsNone)
+
+[<Fact>]
+let ``telnet section present with default port parses correctly`` () =
+    let json = """{"telnet":{}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Telnet with
+        | None -> Assert.Fail("Expected Some TelnetChannelConfig")
+        | Some tn ->
+            Assert.Equal(2323, tn.Port)       // default
+            Assert.Equal(AnyoneAllowed, tn.AllowFrom)
+
+[<Fact>]
+let ``telnet port custom value is parsed`` () =
+    let json = """{"telnet":{"port":9999}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Telnet with
+        | None -> Assert.Fail("Expected Some TelnetChannelConfig")
+        | Some tn -> Assert.Equal(9999, tn.Port)
+
+[<Fact>]
+let ``telnet allow_from specific users becomes AllowedSet`` () =
+    let json = """{"telnet":{"allow_from":["admin","developer"]}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.Telnet with
+        | None -> Assert.Fail("Expected Some TelnetChannelConfig")
+        | Some tn ->
+            match tn.AllowFrom with
+            | AllowedSet s -> Assert.Equal(2, s.Count)
+            | AnyoneAllowed -> Assert.Fail("Expected AllowedSet, got AnyoneAllowed")
+
+// ── inter_agent section ────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``inter_agent section absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.InterAgent.IsNone)
+
+[<Fact>]
+let ``inter_agent section with enabled false defaults to None`` () =
+    let json = """{"inter_agent":{"enabled":false,"port":18800}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.True(cfg.InterAgent.IsNone)
+
+[<Fact>]
+let ``inter_agent section with enabled true parses correctly`` () =
+    let json = """{"inter_agent":{"enabled":true}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.InterAgent with
+        | None -> Assert.Fail("Expected Some InterAgentChannelConfig")
+        | Some ia ->
+            Assert.True(ia.Enabled)
+            Assert.Equal(18800, ia.Port)              // default
+            Assert.Equal("", ia.InstanceName)         // default
+            Assert.Equal(30, ia.MaxRoundsPerSession)  // default
+            Assert.Equal(3600, ia.TaskTtlSeconds)     // default
+            Assert.True(ia.AuditWebhookUrl.IsNone)   // default
+
+[<Fact>]
+let ``inter_agent port and instance_name are parsed correctly`` () =
+    let json = """{"inter_agent":{"enabled":true,"port":9000,"instance_name":"prod-agent"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.InterAgent with
+        | None -> Assert.Fail("Expected Some InterAgentChannelConfig")
+        | Some ia ->
+            Assert.Equal(9000, ia.Port)
+            Assert.Equal("prod-agent", ia.InstanceName)
+
+[<Fact>]
+let ``inter_agent audit_webhook_url is parsed as Some`` () =
+    let json = """{"inter_agent":{"enabled":true,"audit_webhook_url":"https://audit.example.com/hook"}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.InterAgent with
+        | None -> Assert.Fail("Expected Some InterAgentChannelConfig")
+        | Some ia -> Assert.Equal(Some "https://audit.example.com/hook", ia.AuditWebhookUrl)
