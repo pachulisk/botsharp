@@ -1191,3 +1191,54 @@ let ``exec_sandbox round-trips correctly`` () =
     match roundTrip cfg with
     | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
     | Ok parsed  -> Assert.Equal("bwrap", parsed.ExecSandbox)
+
+// ── context_block_limit ───────────────────────────────────────────────────────
+
+[<Fact>]
+let ``context_block_limit None does not emit key`` () =
+    let cfg = BotSharpConfig.defaults  // ContextBlockLimit = None
+    let json = serializeConfig cfg
+    use doc = JsonDocument.Parse(json)
+    Assert.False(doc.RootElement.TryGetProperty("context_block_limit") |> fst,
+                 "Expected context_block_limit absent when None")
+
+[<Fact>]
+let ``context_block_limit Some round-trips correctly`` () =
+    let cfg = { BotSharpConfig.defaults with ContextBlockLimit = Some 512 }
+    match roundTrip cfg with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok parsed  -> Assert.Equal(Some 512, parsed.ContextBlockLimit)
+
+// ── max_iterations_message ────────────────────────────────────────────────────
+
+[<Fact>]
+let ``max_iterations_message None does not emit key`` () =
+    let cfg = BotSharpConfig.defaults  // MaxIterationsMessage = None
+    let json = serializeConfig cfg
+    use doc = JsonDocument.Parse(json)
+    Assert.False(doc.RootElement.TryGetProperty("max_iterations_message") |> fst,
+                 "Expected max_iterations_message absent when None")
+
+[<Fact>]
+let ``max_iterations_message Some round-trips correctly`` () =
+    let cfg = { BotSharpConfig.defaults with MaxIterationsMessage = Some "Too many steps." }
+    match roundTrip cfg with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok parsed  -> Assert.Equal(Some "Too many steps.", parsed.MaxIterationsMessage)
+
+// ── fail_on_tool_error ────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``fail_on_tool_error false does not emit key`` () =
+    let cfg = BotSharpConfig.defaults  // FailOnToolError = false
+    let json = serializeConfig cfg
+    use doc = JsonDocument.Parse(json)
+    Assert.False(doc.RootElement.TryGetProperty("fail_on_tool_error") |> fst,
+                 "Expected fail_on_tool_error absent when false")
+
+[<Fact>]
+let ``fail_on_tool_error true round-trips correctly`` () =
+    let cfg = { BotSharpConfig.defaults with FailOnToolError = true }
+    match roundTrip cfg with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok parsed  -> Assert.True(parsed.FailOnToolError)
