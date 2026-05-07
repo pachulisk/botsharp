@@ -1452,3 +1452,76 @@ let ``hook_timeout value is parsed`` () =
     match parseJson json with
     | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
     | Ok cfg -> Assert.Equal(60, cfg.HookTimeout)
+
+// ── memory_summary_token_limit ────────────────────────────────────────────────
+
+[<Fact>]
+let ``memory_summary_token_limit absent defaults to 5000`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(5000, cfg.MemorySummaryTokenLimit)
+
+[<Fact>]
+let ``memory_summary_token_limit value is parsed`` () =
+    let json = """{"memory_summary_token_limit":3000}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(3000, cfg.MemorySummaryTokenLimit)
+
+// ── phase1_min_idle_minutes ───────────────────────────────────────────────────
+
+[<Fact>]
+let ``phase1_min_idle_minutes absent defaults to 30`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(30, cfg.Phase1MinIdleMinutes)
+
+[<Fact>]
+let ``phase1_min_idle_minutes value is parsed`` () =
+    let json = """{"phase1_min_idle_minutes":60}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(60, cfg.Phase1MinIdleMinutes)
+
+// ── phase2_cooldown_hours ─────────────────────────────────────────────────────
+
+[<Fact>]
+let ``phase2_cooldown_hours absent defaults to 6`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(6, cfg.Phase2CooldownHours)
+
+[<Fact>]
+let ``phase2_cooldown_hours value is parsed`` () =
+    let json = """{"phase2_cooldown_hours":12}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(12, cfg.Phase2CooldownHours)
+
+// ── phase1_model / phase2_model ───────────────────────────────────────────────
+
+[<Fact>]
+let ``phase1_model absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(None, cfg.Phase1Model)
+
+[<Fact>]
+let ``phase1_model value is parsed as Some`` () =
+    let json = """{"phase1_model":"claude-haiku-4-5"}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(Some "claude-haiku-4-5", cfg.Phase1Model)
+
+[<Fact>]
+let ``phase2_model absent defaults to None`` () =
+    match parseJson "{}" with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(None, cfg.Phase2Model)
+
+[<Fact>]
+let ``phase2_model value is parsed as Some`` () =
+    let json = """{"phase2_model":"claude-sonnet-4-6"}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg -> Assert.Equal(Some "claude-sonnet-4-6", cfg.Phase2Model)
