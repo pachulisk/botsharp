@@ -735,3 +735,43 @@ let ``TokenTracker.shouldCompactByTokens returns true when usage meets 80 percen
     let usage = mkUsage (window * 81 / 100) 0 0
     let t2 = TokenTracker.recordApiUsage usage t
     Assert.True(TokenTracker.shouldCompactByTokens t2)
+
+// ── NonEmptyList.ofListUnsafe ─────────────────────────────────────────────────
+
+[<Fact>]
+let ``NonEmptyList.ofListUnsafe creates a NonEmptyList from a non-empty list`` () =
+    let nel = NonEmptyList.ofListUnsafe [10; 20; 30]
+    Assert.Equal(10, nel.Head)
+    Assert.Equal<int list>([20; 30], nel.Tail)
+
+[<Fact>]
+let ``NonEmptyList.ofListUnsafe singleton list sets Head and empty Tail`` () =
+    let nel = NonEmptyList.ofListUnsafe ["only"]
+    Assert.Equal("only", nel.Head)
+    Assert.Empty(nel.Tail)
+
+[<Fact>]
+let ``NonEmptyList.ofListUnsafe throws InvalidOperationException for empty list`` () =
+    Assert.Throws<InvalidOperationException>(fun () ->
+        NonEmptyList.ofListUnsafe ([] : int list) |> ignore)
+    |> ignore
+
+// ── ApiKey.tryFromEnv ────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``ApiKey.tryFromEnv returns None when environment variable is absent`` () =
+    // Use a name that will never be set in CI or local environments
+    let result = ApiKey.tryFromEnv "BOTSHARP_TEST_KEY_DEFINITELY_NOT_SET_XYZ_12345"
+    Assert.Equal(None, result)
+
+[<Fact>]
+let ``ApiKey.tryFromEnv returns Some ApiKey when environment variable is set`` () =
+    let varName = "BOTSHARP_TEST_KEY_UNIT_TEST_ONLY"
+    let original = Environment.GetEnvironmentVariable(varName)
+    try
+        Environment.SetEnvironmentVariable(varName, "sk-test-from-env")
+        match ApiKey.tryFromEnv varName with
+        | None     -> Assert.Fail("Expected Some ApiKey for set environment variable")
+        | Some key -> Assert.Equal("sk-test-from-env", ApiKey.value key)
+    finally
+        Environment.SetEnvironmentVariable(varName, original)
