@@ -211,6 +211,31 @@ let ``NonEmptyList.ofList Error for empty list`` () =
     | Ok _ -> Assert.Fail("Expected Error for empty list")
     | Error _ -> ()
 
+[<Fact>]
+let ``NonEmptyList.tryFind returns Some when head matches`` () =
+    let nel = NonEmptyList.create 1 [2; 3]
+    Assert.Equal(Some 1, NonEmptyList.tryFind (fun x -> x = 1) nel)
+
+[<Fact>]
+let ``NonEmptyList.tryFind returns Some when tail element matches`` () =
+    let nel = NonEmptyList.create 1 [2; 3]
+    Assert.Equal(Some 3, NonEmptyList.tryFind (fun x -> x = 3) nel)
+
+[<Fact>]
+let ``NonEmptyList.tryFind returns None when no element matches`` () =
+    let nel = NonEmptyList.create 1 [2; 3]
+    Assert.Equal(None, NonEmptyList.tryFind (fun x -> x = 99) nel)
+
+[<Fact>]
+let ``NonEmptyList.tryFind on singleton returns Some when it matches`` () =
+    let nel = NonEmptyList.singleton "hello"
+    Assert.Equal(Some "hello", NonEmptyList.tryFind (fun s -> s = "hello") nel)
+
+[<Fact>]
+let ``NonEmptyList.tryFind on singleton returns None when it does not match`` () =
+    let nel = NonEmptyList.singleton "hello"
+    Assert.Equal(None, NonEmptyList.tryFind (fun s -> s = "world") nel)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // LlmError.shouldRetry — retry decision table
 // ═══════════════════════════════════════════════════════════════════════════
