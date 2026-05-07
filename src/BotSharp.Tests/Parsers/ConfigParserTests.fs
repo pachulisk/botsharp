@@ -390,6 +390,27 @@ let ``mcp_servers http with invalid URL yields error`` () =
     | Error errs -> Assert.True(errs.Length > 0, "Expected non-empty error list for invalid URL")
     | Ok cfg -> Assert.Fail($"Expected Error for invalid http URL, got Ok: {cfg.McpServers}")
 
+[<Fact>]
+let ``mcp_servers unix socket parses correctly`` () =
+    let json = """{"mcp_servers":{"sock":{"type":"unix","socket_path":"/tmp/myserver.sock"}}}"""
+    match parseJson json with
+    | Error errs -> Assert.Fail($"Expected Ok, got errors: {errs}")
+    | Ok cfg ->
+        match cfg.McpServers.TryFind("sock") with
+        | None -> Assert.Fail("Expected 'sock' key in McpServers")
+        | Some entry ->
+            match entry.Connection with
+            | UnixSocketServer path -> Assert.Equal("/tmp/myserver.sock", path)
+            | other -> Assert.Fail($"Expected UnixSocketServer, got {other}")
+
+[<Fact>]
+let ``mcp_servers unix socket missing socket_path is skipped`` () =
+    // socket_path is required; missing it → error added, server entry skipped
+    let json = """{"mcp_servers":{"bad":{"type":"unix"}}}"""
+    match parseJson json with
+    | Error _errs -> ()   // acceptable — requireString "socket_path" returns MissingField
+    | Ok cfg -> Assert.Equal(0, cfg.McpServers.Count)
+
 // ── telegram — additional branches ────────────────────────────────────────────
 
 [<Fact>]

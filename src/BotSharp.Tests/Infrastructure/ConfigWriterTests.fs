@@ -395,6 +395,30 @@ let ``mcp_servers absent from JSON when empty`` () =
     Assert.False(doc.RootElement.TryGetProperty("mcp_servers") |> fst,
                  "Expected mcp_servers to be absent when McpServers is empty")
 
+[<Fact>]
+let ``unix mcp_server emitted with correct type and socket_path fields`` () =
+    let entry = UnixSocketServer "/tmp/myserver.sock" |> mcpEntry
+    let cfg = { BotSharpConfig.defaults with McpServers = Map.ofList [ "sock-server", entry ] }
+    let json = serializeConfig cfg
+    use doc  = JsonDocument.Parse(json)
+    let srvEl = doc.RootElement.GetProperty("mcp_servers").GetProperty("sock-server")
+    Assert.Equal("unix", srvEl.GetProperty("type").GetString())
+    Assert.Equal("/tmp/myserver.sock", srvEl.GetProperty("socket_path").GetString())
+
+[<Fact>]
+let ``unix mcp_server round-trips through ConfigParser`` () =
+    let entry = UnixSocketServer "/var/run/agent.sock" |> mcpEntry
+    let cfg = { BotSharpConfig.defaults with McpServers = Map.ofList [ "unix-srv", entry ] }
+    match roundTrip cfg with
+    | Error errs -> Assert.Fail($"Parse failed: {errs}")
+    | Ok parsed  ->
+        match parsed.McpServers.TryFind("unix-srv") with
+        | None -> Assert.Fail("Expected unix-srv in McpServers")
+        | Some e ->
+            match e.Connection with
+            | UnixSocketServer path -> Assert.Equal("/var/run/agent.sock", path)
+            | other -> Assert.Fail($"Expected UnixSocketServer, got {other}")
+
 // ── allow_from AllowedSet (top-level) ────────────────────────────────────────
 
 [<Fact>]
