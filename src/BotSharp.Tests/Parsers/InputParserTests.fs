@@ -135,6 +135,173 @@ let ``/dream with trailing space still parses`` () =
     Assert.Equal(Ok (Command Dream), parseUserInput "/dream   ")
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Commands added after initial implementation — full coverage pass
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── /clear ────────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/clear parses to Command ClearHistory`` () =
+    Assert.Equal(Ok (Command ClearHistory), parseUserInput "/clear")
+
+[<Fact>]
+let ``/clear with trailing space parses to Command ClearHistory`` () =
+    Assert.Equal(Ok (Command ClearHistory), parseUserInput "/clear   ")
+
+[<Fact>]
+let ``/clearstuff is not a command — falls back to ChatMessage`` () =
+    match parseUserInput "/clearstuff" with
+    | Ok (ChatMessage _) -> ()
+    | other -> Assert.Fail($"Expected ChatMessage, got {other}")
+
+// ── /history ──────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/history with no argument parses to ShowHistory None`` () =
+    Assert.Equal(Ok (Command (ShowHistory None)), parseUserInput "/history")
+
+[<Fact>]
+let ``/history with trailing space parses to ShowHistory None`` () =
+    Assert.Equal(Ok (Command (ShowHistory None)), parseUserInput "/history   ")
+
+[<Fact>]
+let ``/history with numeric argument parses to ShowHistory (Some N)`` () =
+    Assert.Equal(Ok (Command (ShowHistory (Some 10))), parseUserInput "/history 10")
+
+[<Fact>]
+let ``/history with argument "1" parses to ShowHistory (Some 1)`` () =
+    Assert.Equal(Ok (Command (ShowHistory (Some 1))), parseUserInput "/history 1")
+
+[<Fact>]
+let ``/history with "50" parses to ShowHistory (Some 50)`` () =
+    Assert.Equal(Ok (Command (ShowHistory (Some 50))), parseUserInput "/history 50")
+
+// ── /model ────────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/model with no argument parses to SwitchModel None`` () =
+    Assert.Equal(Ok (Command (SwitchModel None)), parseUserInput "/model")
+
+[<Fact>]
+let ``/model with trailing space parses to SwitchModel None`` () =
+    Assert.Equal(Ok (Command (SwitchModel None)), parseUserInput "/model   ")
+
+[<Fact>]
+let ``/model with model name parses to SwitchModel (Some name)`` () =
+    Assert.Equal(Ok (Command (SwitchModel (Some "claude-sonnet-4-6"))), parseUserInput "/model claude-sonnet-4-6")
+
+[<Fact>]
+let ``/model with short name parses to SwitchModel (Some name)`` () =
+    Assert.Equal(Ok (Command (SwitchModel (Some "gpt-4o"))), parseUserInput "/model gpt-4o")
+
+// ── /sessions ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/sessions with no argument parses to ListSessions None`` () =
+    Assert.Equal(Ok (Command (ListSessions None)), parseUserInput "/sessions")
+
+[<Fact>]
+let ``/sessions with trailing space parses to ListSessions None`` () =
+    Assert.Equal(Ok (Command (ListSessions None)), parseUserInput "/sessions   ")
+
+[<Fact>]
+let ``/sessions with numeric page argument parses to ListSessions (Some N)`` () =
+    Assert.Equal(Ok (Command (ListSessions (Some 2))), parseUserInput "/sessions 2")
+
+[<Fact>]
+let ``/sessions "1" parses to ListSessions (Some 1)`` () =
+    Assert.Equal(Ok (Command (ListSessions (Some 1))), parseUserInput "/sessions 1")
+
+// ── /search ───────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/search with query parses to SearchSessions query`` () =
+    Assert.Equal(Ok (Command (SearchSessions "hello world")), parseUserInput "/search hello world")
+
+[<Fact>]
+let ``/search with single word parses to SearchSessions query`` () =
+    Assert.Equal(Ok (Command (SearchSessions "python")), parseUserInput "/search python")
+
+[<Fact>]
+let ``/search query preserves internal spaces`` () =
+    match parseUserInput "/search foo   bar" with
+    | Ok (Command (SearchSessions q)) -> Assert.Contains("foo", q)
+    | other -> Assert.Fail($"Expected SearchSessions, got {other}")
+
+// ── /rebuild-index ────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/rebuild-index parses to Command RebuildIndex`` () =
+    Assert.Equal(Ok (Command RebuildIndex), parseUserInput "/rebuild-index")
+
+[<Fact>]
+let ``/rebuild-index with trailing space parses to Command RebuildIndex`` () =
+    Assert.Equal(Ok (Command RebuildIndex), parseUserInput "/rebuild-index   ")
+
+// ── /jobs ─────────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/jobs with no argument parses to ShowJobs None`` () =
+    Assert.Equal(Ok (Command (ShowJobs None)), parseUserInput "/jobs")
+
+[<Fact>]
+let ``/jobs with trailing space parses to ShowJobs None`` () =
+    Assert.Equal(Ok (Command (ShowJobs None)), parseUserInput "/jobs   ")
+
+[<Fact>]
+let ``/jobs with kind argument parses to ShowJobs (Some kind)`` () =
+    Assert.Equal(Ok (Command (ShowJobs (Some "cron"))), parseUserInput "/jobs cron")
+
+[<Fact>]
+let ``/jobs with "pending" kind parses to ShowJobs (Some "pending")`` () =
+    Assert.Equal(Ok (Command (ShowJobs (Some "pending"))), parseUserInput "/jobs pending")
+
+// ── /task ─────────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/task with no argument parses to TaskCmd None`` () =
+    Assert.Equal(Ok (Command (TaskCmd None)), parseUserInput "/task")
+
+[<Fact>]
+let ``/task with trailing space parses to TaskCmd None`` () =
+    Assert.Equal(Ok (Command (TaskCmd None)), parseUserInput "/task   ")
+
+[<Fact>]
+let ``/task with subcommand "add" parses to TaskCmd (Some "add")`` () =
+    Assert.Equal(Ok (Command (TaskCmd (Some "add buy groceries"))), parseUserInput "/task add buy groceries")
+
+[<Fact>]
+let ``/task with subcommand "done" parses to TaskCmd (Some "done 1")`` () =
+    Assert.Equal(Ok (Command (TaskCmd (Some "done 1"))), parseUserInput "/task done 1")
+
+[<Fact>]
+let ``/task with subcommand "clear" parses to TaskCmd (Some "clear")`` () =
+    Assert.Equal(Ok (Command (TaskCmd (Some "clear"))), parseUserInput "/task clear")
+
+[<Fact>]
+let ``/task with whitespace-only arg normalizes to TaskCmd None`` () =
+    // pTaskCmd: subOpt |> Option.bind (fun s -> if s.Trim() = "" then None else Some s.Trim())
+    Assert.Equal(Ok (Command (TaskCmd None)), parseUserInput "/task   ")
+
+// ── /events ───────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``/events with no argument parses to ShowEvents None`` () =
+    Assert.Equal(Ok (Command (ShowEvents None)), parseUserInput "/events")
+
+[<Fact>]
+let ``/events with trailing space parses to ShowEvents None`` () =
+    Assert.Equal(Ok (Command (ShowEvents None)), parseUserInput "/events   ")
+
+[<Fact>]
+let ``/events with category argument parses to ShowEvents (Some category)`` () =
+    Assert.Equal(Ok (Command (ShowEvents (Some "tool"))), parseUserInput "/events tool")
+
+[<Fact>]
+let ``/events with "error" category parses to ShowEvents (Some "error")`` () =
+    Assert.Equal(Ok (Command (ShowEvents (Some "error"))), parseUserInput "/events error")
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Cron schedule parsing
 // ═══════════════════════════════════════════════════════════════════════════
 
