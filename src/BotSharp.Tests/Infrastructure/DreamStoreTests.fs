@@ -305,3 +305,43 @@ let ``findDreamEntry matches on full SHA string`` () =
         | Result.Ok None     -> Assert.Fail("Expected Some entry for full SHA match, got None")
         | Result.Ok (Some e) -> Assert.Equal("deadbeef", e.Sha)
     }) |> Async.RunSynchronously
+
+// ═══════════════════════════════════════════════════════════════════════════
+// parseDreamLine — public JSONL deserializer used by StateDb rebuild
+// ═══════════════════════════════════════════════════════════════════════════
+
+[<Fact>]
+let ``parseDreamLine returns Some for valid JSONL entry`` () =
+    let line = """{"sha":"aabb1122","occurred_at":"2026-03-01T10:00:00+00:00","summary":"Daily reflection","message_count":7}"""
+    match parseDreamLine line with
+    | None   -> Assert.Fail("Expected Some for valid JSONL entry")
+    | Some e ->
+        Assert.Equal("aabb1122", e.Sha)
+        Assert.Equal("Daily reflection", e.Summary)
+        Assert.Equal(7, e.MessageCount)
+
+[<Fact>]
+let ``parseDreamLine returns None for invalid JSON`` () =
+    Assert.Equal(None, parseDreamLine "not-json-at-all")
+
+[<Fact>]
+let ``parseDreamLine returns None when sha is missing`` () =
+    let line = """{"occurred_at":"2026-03-01T10:00:00+00:00","summary":"no sha","message_count":1}"""
+    Assert.Equal(None, parseDreamLine line)
+
+[<Fact>]
+let ``parseDreamLine returns None when summary is missing`` () =
+    let line = """{"sha":"aabb1122","occurred_at":"2026-03-01T10:00:00+00:00","message_count":1}"""
+    Assert.Equal(None, parseDreamLine line)
+
+[<Fact>]
+let ``parseDreamLine returns None when occurred_at is not a valid DateTimeOffset`` () =
+    let line = """{"sha":"aabb1122","occurred_at":"not-a-date","summary":"bad date","message_count":1}"""
+    Assert.Equal(None, parseDreamLine line)
+
+[<Fact>]
+let ``parseDreamLine defaults message_count to 0 when absent`` () =
+    let line = """{"sha":"ccdd3344","occurred_at":"2026-03-01T10:00:00+00:00","summary":"no count"}"""
+    match parseDreamLine line with
+    | None   -> Assert.Fail("Expected Some entry even without message_count")
+    | Some e -> Assert.Equal(0, e.MessageCount)
