@@ -618,3 +618,95 @@ let ``TokenUsage.formatUsage omits cache info when prompt tokens are zero`` () =
     let u = mkUsage 0 0 0
     let s = TokenUsage.formatUsage u
     Assert.DoesNotContain("cached", s)
+
+// ── TokenTracker ─────────────────────────────────────────────────────────────
+
+[<Fact>]
+let ``TokenTracker.empty creates tracker with given context window`` () =
+    let t = TokenTracker.empty 128_000
+    Assert.Equal(128_000, t.ContextWindow)
+
+[<Fact>]
+let ``TokenTracker.empty has zero total usage`` () =
+    let t = TokenTracker.empty 128_000
+    Assert.Equal(0, t.TotalUsage.PromptTokens)
+    Assert.Equal(0, t.TotalUsage.CompletionTokens)
+
+[<Fact>]
+let ``TokenTracker.empty has no LastUsage`` () =
+    let t = TokenTracker.empty 128_000
+    Assert.Equal(None, t.LastUsage)
+
+[<Fact>]
+let ``TokenTracker.currentUsageEstimate with no LastUsage returns EstimatedPending`` () =
+    let t = { TokenTracker.empty 128_000 with EstimatedPending = 500 }
+    Assert.Equal(500, TokenTracker.currentUsageEstimate t)
+
+[<Fact>]
+let ``TokenTracker.currentUsageEstimate with LastUsage returns prompt + completion + pending`` () =
+    let usage = mkUsage 1000 200 0
+    let t = { TokenTracker.empty 128_000 with LastUsage = Some usage; EstimatedPending = 300 }
+    Assert.Equal(1500, TokenTracker.currentUsageEstimate t)
+
+[<Fact>]
+let ``TokenTracker.recordApiUsage updates LastUsage and resets EstimatedPending`` () =
+    let t = { TokenTracker.empty 128_000 with EstimatedPending = 999 }
+    let usage = mkUsage 1000 200 0
+    let t2 = TokenTracker.recordApiUsage usage t
+    Assert.Equal(Some usage, t2.LastUsage)
+    Assert.Equal(0, t2.EstimatedPending)
+
+[<Fact>]
+let ``TokenTracker.recordApiUsage accumulates TotalUsage`` () =
+    let t = TokenTracker.empty 128_000
+    let u1 = mkUsage 500 100 0
+    let u2 = mkUsage 300 50  0
+    let t2 = TokenTracker.recordApiUsage u1 t |> TokenTracker.recordApiUsage u2
+    Assert.Equal(800, t2.TotalUsage.PromptTokens)
+    Assert.Equal(150, t2.TotalUsage.CompletionTokens)
+
+[<Fact>]
+let ``TokenTracker.addPendingEstimate accumulates pending tokens`` () =
+    let t = TokenTracker.empty 128_000
+    let t2 = t |> TokenTracker.addPendingEstimate 100 |> TokenTracker.addPendingEstimate 200
+    Assert.Equal(300, t2.EstimatedPending)
+
+[<Fact>]
+let ``TokenTracker.contextRemainingPercent returns 100 when context window is 0`` () =
+    let t = TokenTracker.empty 0
+    Assert.Equal(100, TokenTracker.contextRemainingPercent t)
+
+[<Fact>]
+let ``TokenTracker.contextRemainingPercent returns 100 when no tokens used`` () =
+    let t = TokenTracker.empty 128_000
+    Assert.Equal(100, TokenTracker.contextRemainingPercent t)
+
+[<Fact>]
+let ``TokenTracker.contextRemainingPercent decreases as usage grows`` () =
+    let t = TokenTracker.empty 32_000
+    let usage = mkUsage 20_000 0 0
+    let t2 = TokenTracker.recordApiUsage usage t
+    let pct = TokenTracker.contextRemainingPercent t2
+    Assert.True(pct < 100, sprintf "Expected <100%% remaining, got %d%%" pct)
+
+[<Fact>]
+let ``TokenTracker.shouldCompactByTokens returns false when context window is 0`` () =
+    let t = TokenTracker.empty 0
+    Assert.False(TokenTracker.shouldCompactByTokens t)
+
+[<Fact>]
+let ``TokenTracker.shouldCompactByTokens returns false when usage is below 80 percent`` () =
+    let t = TokenTracker.empty 128_000
+    // 60% of context window (well below 80% threshold)
+    let usage = mkUsage (128_000 * 60 / 100) 0 0
+    let t2 = TokenTracker.recordApiUsage usage t
+    Assert.False(TokenTracker.shouldCompactByTokens t2)
+
+[<Fact>]
+let ``TokenTracker.shouldCompactByTokens returns true when usage meets 80 percent`` () =
+    let window = 128_000
+    let t = TokenTracker.empty window
+    // 81% usage: 81 * 128000 / 100 = 103680
+    let usage = mkUsage (window * 81 / 100) 0 0
+    let t2 = TokenTracker.recordApiUsage usage t
+    Assert.True(TokenTracker.shouldCompactByTokens t2)
